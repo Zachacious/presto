@@ -4,241 +4,303 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"time"
 
-	"github.com/Zachacious/presto/internal/config"
 	"github.com/Zachacious/presto/pkg/types"
 )
 
-// Client handles AI requests via OpenRouter
+// Client handles AI API requests
 type Client struct {
-	config     *config.AIConfig
+	config     *types.APIConfig
 	httpClient *http.Client
 }
 
-// OpenRouterRequest represents the request format for OpenRouter API
-type OpenRouterRequest struct {
-	Model       string    `json:"model"`
-	Messages    []Message `json:"messages"`
-	MaxTokens   int       `json:"max_tokens,omitempty"`
-	Temperature float64   `json:"temperature,omitempty"`
-	Stream      bool      `json:"stream"`
-}
-
-// Message represents a chat message
-type Message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
-
-// OpenRouterResponse represents the response from OpenRouter API
-type OpenRouterResponse struct {
-	ID      string    `json:"id"`
-	Object  string    `json:"object"`
-	Created int64     `json:"created"`
-	Model   string    `json:"model"`
-	Choices []Choice  `json:"choices"`
-	Usage   Usage     `json:"usage"`
-	Error   *APIError `json:"error,omitempty"`
-}
-
-// Choice represents a response choice
-type Choice struct {
-	Index        int     `json:"index"`
-	Message      Message `json:"message"`
-	FinishReason string  `json:"finish_reason"`
-}
-
-// Usage represents token usage
-type Usage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
-}
-
-// APIError represents an API error
-type APIError struct {
-	Message string `json:"message"`
-	Type    string `json:"type"`
-	Code    string `json:"code"`
-}
-
 // New creates a new AI client
-func New(cfg *config.AIConfig) *Client {
+func New(cfg *types.APIConfig) *Client {
 	return &Client{
 		config: cfg,
 		httpClient: &http.Client{
-			Timeout: cfg.Timeout,
+			Timeout: time.Duration(cfg.Timeout) * time.Second,
 		},
 	}
+}
+
+// ValidateConfig checks if the AI configuration is valid
+func (c *Client) ValidateConfig() error {
+	if c.config.APIKey == "" && c.config.Provider != types.ProviderLocal {
+		return fmt.Errorf("API key is required for provider %s", c.config.Provider)
+	}
+	if c.config.BaseURL == "" {
+		return fmt.Errorf("base URL is required")
+	}
+	if c.config.Model == "" {
+		return fmt.Errorf("model is required")
+	}
+	return nil
 }
 
 // ProcessContent sends content to AI for processing
 func (c *Client) ProcessContent(req types.AIRequest, contextFiles []*types.ContextFile) (*types.AIResponse, error) {
-	startTime := time.Now()
+	// Build the complete prompt
+	fullPrompt := c.buildPrompt(req, contextFiles)
 
-	prompt := c.buildPrompt(req, contextFiles)
+	// Create API request based on provider
+	var apiResp APIResponse
+	var err error
 
-	openRouterReq := OpenRouterRequest{
-		Model: c.config.Model,
-		Messages: []Message{
-			{
-				Role:    "system",
-				Content: c.getSystemPrompt(req.Mode),
-			},
-			{
-				Role:    "user",
-				Content: prompt,
-			},
-		},
-		MaxTokens:   req.MaxTokens,
-		Temperature: req.Temperature,
-		Stream:      false,
+	switch c.config.Provider {
+	case types.ProviderOpenAI, types.ProviderLocal, types.ProviderCustom:
+		apiResp, err = c.sendOpenAIRequest(fullPrompt, req)
+	case types.ProviderAnthropic:
+		apiResp, err = c.sendAnthropicRequest(fullPrompt, req)
+	default:
+		// Default to OpenAI-compatible API
+		apiResp, err = c.sendOpenAIRequest(fullPrompt, req)
 	}
 
-	response, err := c.makeRequest(openRouterReq)
 	if err != nil {
 		return nil, err
 	}
 
-	if response.Error != nil {
-		return nil, fmt.Errorf("API error: %s", response.Error.Message)
-	}
-
-	if len(response.Choices) == 0 {
-		return nil, fmt.Errorf("no response choices returned")
-	}
-
+	// Convert to standard response
 	return &types.AIResponse{
-		Content:    response.Choices[0].Message.Content,
-		TokensUsed: response.Usage.TotalTokens,
-		Model:      response.Model,
-		Duration:   time.Since(startTime),
+		Content:    apiResp.GetContent(),
+		TokensUsed: apiResp.GetTokensUsed(),
+		Model:      c.config.Model,
 	}, nil
 }
 
-// getSystemPrompt returns the appropriate system prompt based on mode
-func (c *Client) getSystemPrompt(mode types.ProcessingMode) string {
-	switch mode {
-	case types.ModeGenerate:
-		return `You are a helpful assistant that generates new files based on context and prompts. 
-Study the provided context files to understand patterns, architecture, and coding style. 
-Generate complete, working code that follows the same patterns and conventions.
-Return only the generated code unless specifically asked to include explanations.`
-
-	case types.ModeTransform:
-		return `You are a helpful assistant that transforms files according to specific instructions. 
-Follow the user's prompt exactly and return only the processed content unless specifically asked to include explanations.
-When context files are provided, use them to understand coding patterns and maintain consistency.`
-
-	default:
-		return `You are a helpful assistant that processes files according to specific instructions.
-Follow the user's prompt exactly and maintain the same functionality unless asked to modify it.`
-	}
-}
-
-// buildPrompt constructs the full prompt for the AI
+// buildPrompt constructs the full prompt with context
 func (c *Client) buildPrompt(req types.AIRequest, contextFiles []*types.ContextFile) string {
 	var prompt bytes.Buffer
 
 	// Add context files if provided
 	if len(contextFiles) > 0 {
-		prompt.WriteString("CONTEXT FILES:\n")
-		prompt.WriteString("The following files provide context about the codebase, patterns, and requirements:\n\n")
-
-		for i, ctx := range contextFiles {
-			prompt.WriteString(fmt.Sprintf("[Context %d: %s (%s)]\n", i+1, ctx.Label, ctx.Language))
-			prompt.WriteString("```\n")
-			prompt.WriteString(ctx.Content)
-			prompt.WriteString("\n```\n\n")
+		prompt.WriteString("Context files:\n\n")
+		for _, file := range contextFiles {
+			prompt.WriteString(fmt.Sprintf("=== %s (%s) ===\n", file.Label, file.Language))
+			prompt.WriteString(file.Content)
+			prompt.WriteString("\n\n")
 		}
-
-		prompt.WriteString("END CONTEXT\n\n")
+		prompt.WriteString("---\n\n")
 	}
 
 	// Add the main prompt
-	prompt.WriteString("TASK:\n")
 	prompt.WriteString(req.Prompt)
-	prompt.WriteString("\n\n")
 
-	// Add target content if in transform mode
+	// Add target content if transforming
 	if req.Mode == types.ModeTransform && req.Content != "" {
-		if req.Language != types.LangUnknown {
-			prompt.WriteString(fmt.Sprintf("TARGET FILE (%s):\n", req.Language))
-		} else {
-			prompt.WriteString("TARGET FILE:\n")
-		}
-		prompt.WriteString("```\n")
+		prompt.WriteString("\n\nContent to transform:\n\n")
 		prompt.WriteString(req.Content)
-		prompt.WriteString("\n```\n\n")
-	}
-
-	// Add mode-specific instructions
-	switch req.Mode {
-	case types.ModeGenerate:
-		prompt.WriteString("Please generate the new file content based on the context and requirements above.\n")
-	case types.ModeTransform:
-		prompt.WriteString("Please process the target file according to the task above.\n")
-	}
-
-	if len(contextFiles) > 0 {
-		prompt.WriteString("Use the context files to understand patterns, style, and architecture.\n")
 	}
 
 	return prompt.String()
 }
 
-// makeRequest makes an HTTP request to the OpenRouter API
-func (c *Client) makeRequest(req OpenRouterRequest) (*OpenRouterResponse, error) {
-	jsonData, err := json.Marshal(req)
+// sendOpenAIRequest sends request to OpenAI-compatible API
+func (c *Client) sendOpenAIRequest(prompt string, req types.AIRequest) (APIResponse, error) {
+	// Build request
+	openAIReq := OpenAIRequest{
+		Model: c.config.Model,
+		Messages: []OpenAIMessage{
+			{
+				Role:    "user",
+				Content: prompt,
+			},
+		},
+		MaxTokens:   c.getMaxTokens(req.MaxTokens),
+		Temperature: c.getTemperature(req.Temperature),
+	}
+
+	// Marshal request
+	jsonData, err := json.Marshal(openAIReq)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
+	// Create HTTP request
 	httpReq, err := http.NewRequest("POST", c.config.BaseURL+"/chat/completions", bytes.NewBuffer(jsonData))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
+	// Set headers
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+c.config.GetAPIKey())
-	httpReq.Header.Set("HTTP-Referer", "https://github.com/yourusername/presto")
-	httpReq.Header.Set("X-Title", "Presto - AI File Processor")
+	if c.config.APIKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.config.APIKey)
+	}
+	httpReq.Header.Set("User-Agent", "Presto/1.0")
 
+	// Send request
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
-	}
-
+	// Check status
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("API request failed with status %d", resp.StatusCode)
 	}
 
-	var response OpenRouterResponse
-	if err := json.Unmarshal(body, &response); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+	// Parse response
+	var apiResp OpenAIResponse
+	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
-	return &response, nil
+	return &apiResp, nil
 }
 
-// ValidateConfig checks if the AI configuration is valid
-func (c *Client) ValidateConfig() error {
-	if c.config.GetAPIKey() == "" {
-		return fmt.Errorf("API key not found in environment variable %s", c.config.APIKeyEnv)
+// sendAnthropicRequest sends request to Anthropic API
+func (c *Client) sendAnthropicRequest(prompt string, req types.AIRequest) (APIResponse, error) {
+	// Build request
+	anthropicReq := AnthropicRequest{
+		Model:       c.config.Model,
+		MaxTokens:   c.getMaxTokens(req.MaxTokens),
+		Temperature: c.getTemperature(req.Temperature),
+		Messages: []AnthropicMessage{
+			{
+				Role:    "user",
+				Content: prompt,
+			},
+		},
 	}
 
-	if c.config.Model == "" {
-		return fmt.Errorf("model not specified")
+	// Marshal request
+	jsonData, err := json.Marshal(anthropicReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	return nil
+	// Create HTTP request
+	httpReq, err := http.NewRequest("POST", c.config.BaseURL+"/messages", bytes.NewBuffer(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	// Set headers
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("X-API-Key", c.config.APIKey)
+	httpReq.Header.Set("anthropic-version", "2023-06-01")
+
+	// Send request
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Check status
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("API request failed with status %d", resp.StatusCode)
+	}
+
+	// Parse response
+	var apiResp AnthropicResponse
+	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return &apiResp, nil
+}
+
+// Helper methods
+func (c *Client) getMaxTokens(requestTokens int) int {
+	if requestTokens > 0 {
+		return requestTokens
+	}
+	return c.config.MaxTokens
+}
+
+func (c *Client) getTemperature(requestTemp float64) float64 {
+	if requestTemp > 0 {
+		return requestTemp
+	}
+	return c.config.Temperature
+}
+
+// API Types
+
+// APIResponse interface for different provider responses
+type APIResponse interface {
+	GetContent() string
+	GetTokensUsed() int
+}
+
+// OpenAI API types
+type OpenAIRequest struct {
+	Model       string          `json:"model"`
+	Messages    []OpenAIMessage `json:"messages"`
+	MaxTokens   int             `json:"max_tokens,omitempty"`
+	Temperature float64         `json:"temperature,omitempty"`
+}
+
+type OpenAIMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+type OpenAIResponse struct {
+	Choices []OpenAIChoice `json:"choices"`
+	Usage   OpenAIUsage    `json:"usage"`
+}
+
+type OpenAIChoice struct {
+	Message OpenAIMessage `json:"message"`
+}
+
+type OpenAIUsage struct {
+	TotalTokens int `json:"total_tokens"`
+}
+
+func (r *OpenAIResponse) GetContent() string {
+	if len(r.Choices) > 0 {
+		return r.Choices[0].Message.Content
+	}
+	return ""
+}
+
+func (r *OpenAIResponse) GetTokensUsed() int {
+	return r.Usage.TotalTokens
+}
+
+// Anthropic API types
+type AnthropicRequest struct {
+	Model       string             `json:"model"`
+	MaxTokens   int                `json:"max_tokens"`
+	Temperature float64            `json:"temperature,omitempty"`
+	Messages    []AnthropicMessage `json:"messages"`
+}
+
+type AnthropicMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+type AnthropicResponse struct {
+	Content []AnthropicContent `json:"content"`
+	Usage   AnthropicUsage     `json:"usage"`
+}
+
+type AnthropicContent struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+type AnthropicUsage struct {
+	InputTokens  int `json:"input_tokens"`
+	OutputTokens int `json:"output_tokens"`
+}
+
+func (r *AnthropicResponse) GetContent() string {
+	if len(r.Content) > 0 && r.Content[0].Type == "text" {
+		return r.Content[0].Text
+	}
+	return ""
+}
+
+func (r *AnthropicResponse) GetTokensUsed() int {
+	return r.Usage.InputTokens + r.Usage.OutputTokens
 }

@@ -1,525 +1,854 @@
 # Presto
 
-Presto is a command-line tool that uses AI to process files and directories. Give it files and a prompt, and AI will transform or generate content according to your instructions.
+**AI-Powered File Processor** - Transform, generate, and enhance your codebase using AI
 
-## What is Presto?
+Presto streamlines your development workflow by applying AI transformations to files and directories. Whether you're adding documentation, modernizing code, or generating new content, Presto makes it simple and consistent.
 
-Presto sends your files to AI models (like Claude or GPT-4) along with instructions on what you want done. The AI reads your files, follows your prompt, and returns the processed content. You can transform existing files or generate new ones.
+## 🎯 What Presto Does
 
-**Transform mode**: Modify existing files
+- **Transform existing files** with AI-powered modifications
+- **Generate new content** from context and prompts
+- **Batch process** entire directories with intelligent filtering
+- **Preserve your workflow** with flexible output modes and backups
+- **Use predefined commands** for common tasks or create custom ones
 
-- "Add comments to this code"
-- "Fix grammar in these documents"
-- "Reformat this data"
+## 🚀 Quick Start
 
-**Generate mode**: Create new files from existing ones
-
-- "Write documentation for this codebase"
-- "Create a summary of these reports"
-- "Generate tests based on this code"
-
-## Why Use Presto?
-
-- **Batch processing**: Transform hundreds of files at once
-- **Consistency**: AI applies the same logic across all files
-- **Context awareness**: AI can see multiple files to understand patterns
-- **Automation**: Script repetitive file processing tasks
-- **Flexibility**: Works with any text files - code, docs, data, etc.
-
-## Installation
+### Installation
 
 ```bash
-git clone https://github.com/yourusername/presto.git
+# Install from source
+git clone https://github.com/Zachacious/presto.git
 cd presto
-make build
-sudo make install
+go build -o presto ./cmd/presto
+sudo mv presto /usr/local/bin/
 ```
 
-Set your OpenRouter API key:
+### First Time Setup
 
 ```bash
-export OPENROUTER_API_KEY="your-key-here"
+# Interactive configuration - sets up API keys and preferences
+presto configure
 ```
 
-## Basic Usage
-
-### Transform Files
-
-Process a single file:
+Or set environment variables:
 
 ```bash
-presto --prompt "Add detailed comments explaining what this code does" --input main.go
+export OPENAI_API_KEY="your-api-key-here"
+# or
+export ANTHROPIC_API_KEY="your-anthropic-key"
 ```
 
-Process multiple files:
+### Basic Usage
 
 ```bash
-presto --prompt "Fix grammar and spelling errors" --input docs/ --recursive
+# Add documentation to a single file
+presto --prompt "Add comprehensive documentation" --input main.go
+
+# Use a predefined command on entire project
+presto --cmd add-docs --input . --recursive
+
+# Generate a README from your codebase
+presto --cmd summarize --input . --context "*.go,*.md" --output-file README.md
 ```
 
-The AI will read each file, apply your prompt, and save the results with a `.presto` suffix.
+## 🎪 Real-World Examples
 
-### Generate New Files
+### 1. Legacy Code Modernization
 
-Create new content from existing files:
+Transform an old JavaScript project to modern ES6+:
 
 ```bash
+# Modernize all JavaScript files
+presto --cmd modernize \
+  --input ./src \
+  --recursive \
+  --pattern ".*\.(js|jsx)$" \
+  --output separate \
+  --suffix .modern.js
+
+# Result: Creates main.modern.js, utils.modern.js, etc.
+```
+
+**Before (utils.js):**
+
+```javascript
+var utils = {
+  forEach: function (arr, callback) {
+    for (var i = 0; i < arr.length; i++) {
+      callback(arr[i], i);
+    }
+  },
+  map: function (arr, callback) {
+    var result = [];
+    for (var i = 0; i < arr.length; i++) {
+      result.push(callback(arr[i], i));
+    }
+    return result;
+  },
+};
+```
+
+**After (utils.js.modern):**
+
+```javascript
+const utils = {
+  forEach: (arr, callback) => {
+    arr.forEach((item, index) => callback(item, index));
+  },
+
+  map: (arr, callback) => {
+    return arr.map((item, index) => callback(item, index));
+  },
+};
+
+export default utils;
+```
+
+### 2. Adding Comprehensive Documentation
+
+Document an entire Go microservice:
+
+```bash
+# Add docs to all Go files with context from README
+presto --cmd add-docs \
+  --input ./internal \
+  --recursive \
+  --context README.md,go.mod \
+  --backup
+```
+
+**Before (user_service.go):**
+
+```go
+type UserService struct {
+    db Database
+    cache Cache
+}
+
+func (s *UserService) GetUser(id string) (*User, error) {
+    if user := s.cache.Get(id); user != nil {
+        return user, nil
+    }
+    user, err := s.db.FindUser(id)
+    if err != nil {
+        return nil, err
+    }
+    s.cache.Set(id, user)
+    return user, nil
+}
+```
+
+**After:**
+
+```go
+// UserService handles user-related operations with caching support.
+// It implements a cache-aside pattern for optimal performance.
+type UserService struct {
+    db    Database // Primary database connection
+    cache Cache    // In-memory cache for frequently accessed users
+}
+
+// GetUser retrieves a user by ID, checking cache first for performance.
+//
+// The method implements a cache-aside pattern:
+// 1. Check cache for existing user data
+// 2. If not found, query database
+// 3. Cache the result for future requests
+//
+// Parameters:
+//   - id: Unique user identifier (must be non-empty)
+//
+// Returns:
+//   - *User: User object if found
+//   - error: Database error or validation error if ID is invalid
+//
+// Example:
+//   user, err := service.GetUser("user-123")
+//   if err != nil {
+//       log.Printf("Failed to get user: %v", err)
+//       return
+//   }
+func (s *UserService) GetUser(id string) (*User, error) {
+    // Fast path: check cache first
+    if user := s.cache.Get(id); user != nil {
+        return user, nil
+    }
+
+    // Slow path: query database
+    user, err := s.db.FindUser(id)
+    if err != nil {
+        return nil, fmt.Errorf("failed to find user %s: %w", id, err)
+    }
+
+    // Cache the result for future requests
+    s.cache.Set(id, user)
+    return user, nil
+}
+```
+
+### 3. Adding Logging and Error Handling
+
+Enhance a Python Flask API with proper logging:
+
+```bash
+# Add comprehensive logging to API endpoints
+presto --prompt "Add structured logging for debugging and monitoring. Include request IDs, timing, and proper error handling." \
+  --input app.py \
+  --output inplace \
+  --backup
+```
+
+**Before:**
+
+```python
+from flask import Flask, request, jsonify
+
+app = Flask(__name__)
+
+@app.route('/users/<user_id>')
+def get_user(user_id):
+    user = database.get_user(user_id)
+    if not user:
+        return jsonify({'error': 'Not found'}), 404
+    return jsonify(user.to_dict())
+```
+
+**After:**
+
+```python
+import logging
+import time
+import uuid
+from flask import Flask, request, jsonify, g
+
+app = Flask(__name__)
+
+# Configure structured logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+@app.before_request
+def before_request():
+    g.request_id = str(uuid.uuid4())[:8]
+    g.start_time = time.time()
+    logger.info(f"[{g.request_id}] Starting {request.method} {request.path}")
+
+@app.after_request
+def after_request(response):
+    duration = time.time() - g.start_time
+    logger.info(f"[{g.request_id}] Completed {request.method} {request.path} "
+               f"- {response.status_code} in {duration:.2f}s")
+    return response
+
+@app.route('/users/<user_id>')
+def get_user(user_id):
+    """Retrieve user by ID with comprehensive logging and error handling."""
+    try:
+        logger.info(f"[{g.request_id}] Fetching user: {user_id}")
+
+        user = database.get_user(user_id)
+        if not user:
+            logger.warning(f"[{g.request_id}] User not found: {user_id}")
+            return jsonify({
+                'error': 'User not found',
+                'request_id': g.request_id
+            }), 404
+
+        logger.info(f"[{g.request_id}] Successfully retrieved user: {user_id}")
+        return jsonify({
+            'data': user.to_dict(),
+            'request_id': g.request_id
+        })
+
+    except database.DatabaseError as e:
+        logger.error(f"[{g.request_id}] Database error for user {user_id}: {str(e)}")
+        return jsonify({
+            'error': 'Internal server error',
+            'request_id': g.request_id
+        }), 500
+
+    except Exception as e:
+        logger.exception(f"[{g.request_id}] Unexpected error for user {user_id}: {str(e)}")
+        return jsonify({
+            'error': 'Internal server error',
+            'request_id': g.request_id
+        }), 500
+```
+
+### 4. Generating Project Documentation
+
+Create comprehensive project documentation from your codebase:
+
+```bash
+# Generate README from all source files
 presto --generate \
-    --prompt "Write comprehensive documentation for this project" \
-    --context README.md \
-    --context src/ \
-    --output-file DOCUMENTATION.md
+  --prompt "Create a comprehensive README.md with setup instructions, API documentation, and examples" \
+  --context "*.go,*.sql,docker-compose.yml" \
+  --output-file README.md
+
+# Generate API documentation
+presto --generate \
+  --prompt "Create OpenAPI/Swagger documentation for this REST API" \
+  --context "handlers/*.go,models/*.go" \
+  --output-file api-docs.yaml
 ```
 
-The AI reads the context files and generates new content based on your prompt.
+### 5. Code Review and Optimization
 
-## Command-Line Options
+Optimize performance-critical code:
 
-### Basic Options
+```bash
+# Analyze and optimize database queries
+presto --prompt "Optimize these database queries for performance. Add indexing suggestions and explain the improvements." \
+  --input ./repositories \
+  --pattern ".*\.go$" \
+  --context "schema.sql" \
+  --output separate \
+  --suffix .optimized
+```
 
-- `--prompt TEXT` - Instructions for the AI
-- `--input PATH` - File or directory to process
-- `--recursive` - Process subdirectories
-- `--dry-run` - Show what would be done without making changes
-- `--verbose` - Show detailed progress
+### 6. Testing and Quality Assurance
+
+Generate comprehensive tests:
+
+```bash
+# Generate unit tests for all services
+presto --prompt "Generate comprehensive unit tests with mocking, edge cases, and good coverage" \
+  --input ./services \
+  --pattern ".*\.go$" \
+  --exclude ".*_test\.go$" \
+  --output separate \
+  --suffix _test.go
+```
+
+### 7. Multi-language Documentation Translation
+
+Convert documentation to different formats:
+
+```bash
+# Convert Go comments to JSDoc format for TypeScript migration
+presto --prompt "Convert Go-style comments to JSDoc format for TypeScript" \
+  --input ./api-client.go \
+  --var TARGET_FORMAT=typescript \
+  --output-file api-client.ts
+```
+
+## 🎛️ Command Reference
+
+### Output Modes
+
+- **`--output inplace`** - Modify original files (creates backups with `--backup`)
+- **`--output separate`** - Create new files with suffix (default: `.presto`)
+- **`--output stdout`** - Print results to terminal
+- **`--output file`** - Single output file (for generate mode)
 
 ### File Filtering
 
-Control which files get processed:
-
-- `--pattern REGEX` - Only process files matching this pattern
-- `--exclude REGEX` - Skip files matching this pattern
-
-Examples:
-
 ```bash
-# Only Python files
-presto --prompt "Add type hints" --pattern "\.py$" --recursive
+# Process specific file types
+--pattern ".*\.(js|jsx|ts|tsx)$"
 
-# Skip test files
-presto --prompt "Add logging" --exclude "_test\.|_spec\." --recursive
+# Skip certain files
+--exclude ".*\.(test|spec)\.js$"
 
-# Specific file types
-presto --prompt "Format consistently" --pattern "\.(js|ts|jsx)$" --input src/
+# Process recursively
+--recursive
+
+# Include context files
+--context "package.json,README.md,*.config.js"
 ```
 
-### Output Control
-
-Choose where results go:
-
-- `--output separate` - Create new files with suffix (default)
-- `--output inplace` - Modify original files
-- `--output stdout` - Print results to terminal
-- `--output file` - Single output file (generate mode only)
-
-Additional output options:
-
-- `--suffix TEXT` - Custom suffix for separate mode (default: `.presto`)
-- `--output-file PATH` - Specific output file for generate mode
-- `--backup` - Create backups when using inplace mode
-
-Examples:
+### AI Configuration
 
 ```bash
-# Create new files with .fixed suffix
-presto --prompt "Fix bugs" --output separate --suffix ".fixed" --input src/
+# Different AI providers
+presto configure  # Interactive setup
 
-# Modify files in place with backup
-presto --prompt "Reformat code" --output inplace --backup --recursive
+# Override model for specific tasks
+--model gpt-4-turbo          # More capable for complex tasks
+--model gpt-3.5-turbo        # Faster and cheaper
+--model claude-3-5-sonnet    # Anthropic's latest
 
-# Print results to terminal
-presto --prompt "Extract function names" --output stdout --input utils.py
+# Adjust creativity
+--temperature 0.1  # More focused and deterministic
+--temperature 0.7  # More creative and varied
 ```
 
-### AI Context
+## 🎭 Built-in Commands
 
-Provide additional files to help AI understand your project:
-
-- `--context FILE` - Single context file
-- `--context-pattern PATTERN` - Multiple files matching pattern
-
-The AI sees both the files being processed AND the context files, giving better results.
-
-Examples:
+### Code Enhancement Commands
 
 ```bash
-# Use style guide as context
-presto --prompt "Match the coding style in the guide" \
-    --context docs/style-guide.md \
-    --input src/ --recursive
+# Add comprehensive documentation
+presto --cmd add-docs --input ./src --recursive
 
-# Use existing good examples
-presto --prompt "Follow the same patterns as the examples" \
-    --context-pattern "examples/*.py" \
-    --input new-feature/
+# Add structured logging throughout codebase
+presto --cmd add-logging --input ./api --recursive
 
-# Multiple context sources
-presto --prompt "Maintain consistency with existing code" \
-    --context config.py \
-    --context-pattern "models/*.py" \
-    --input new-models/
+# Optimize for performance and readability
+presto --cmd optimize --input ./utils --recursive
+
+# Modernize to current best practices
+presto --cmd modernize --input ./legacy --recursive
+
+# Clean up formatting and remove dead code
+presto --cmd cleanup --input . --recursive
 ```
 
-### AI Model Options
-
-- `--model NAME` - Specific AI model to use
-- `--temperature NUMBER` - Creativity level (0.0-2.0, lower = more focused)
-- `--max-tokens NUMBER` - Maximum response length
-
-Examples:
+### Analysis and Documentation Commands
 
 ```bash
-# Use specific model
-presto --prompt "Complex refactoring task" --model "anthropic/claude-3.5-sonnet"
+# Add explanatory comments and clarifications
+presto --cmd explain --input complex_algorithm.py
 
-# Low creativity for precise tasks
-presto --prompt "Fix syntax errors" --temperature 0.0 --recursive
+# Generate project summary
+presto --cmd summarize --context "*.md,*.go" --output-file SUMMARY.md
 
-# High creativity for creative writing
-presto --prompt "Make this text more engaging" --temperature 1.5 --input articles/
+# Convert between formats/languages
+presto --cmd convert --var TARGET_FORMAT=typescript --input api.js
 ```
 
-### Performance Options
+## ⚙️ Configuration
 
-- `--concurrent NUMBER` - How many files to process simultaneously (default: 3)
+### Config File Location
 
-```bash
-# Process many files faster
-presto --prompt "Add headers" --concurrent 8 --recursive --input large-codebase/
+- **Linux/Mac:** `~/.presto/config.yaml`
+- **Windows:** `%USERPROFILE%\.presto\config.yaml`
 
-# Single-threaded for debugging
-presto --prompt "Complex task" --concurrent 1 --verbose --input src/
-```
-
-## Built-in Commands
-
-Pre-made prompts and settings for common tasks:
-
-### Available Commands
-
-- `add-docs` - Add documentation and comments
-- `add-logging` - Add logging statements
-- `optimize` - Improve performance and readability
-- `modernize` - Update to current best practices
-- `cleanup` - Clean formatting and remove clutter
-- `explain` - Add explanatory comments
-- `summarize` - Create summaries (generates new files)
-- `convert` - Convert to different format
-
-### Using Built-in Commands
-
-```bash
-# Use a command instead of writing a prompt
-presto --cmd add-docs --input src/ --recursive
-
-# See all available commands
-presto --list-commands
-
-# See what a command does
-presto --show-command add-docs
-```
-
-Commands are shortcuts that include both a prompt and useful default settings.
-
-## Custom Commands
-
-Save your own prompts as reusable commands.
-
-### Why Create Custom Commands?
-
-- Reuse complex prompts across projects
-- Share common tasks with your team
-- Include default settings and file patterns
-- Use variables for flexibility
-
-### Creating Custom Commands
-
-```bash
-# Save current settings as a command
-presto --prompt "Add comprehensive error handling with logging and metrics" \
-    --pattern "\.go$" \
-    --exclude "_test\.go$" \
-    --recursive \
-    --save-command add-error-handling
-
-# Use your saved command
-presto --cmd add-error-handling --input .
-```
-
-### Commands with Variables
-
-```bash
-# Create command with placeholder variables
-presto --prompt "Convert this {{SOURCE}} to {{TARGET}} format" \
-    --var SOURCE=yaml \
-    --var TARGET=json \
-    --save-command convert-format
-
-# Use with different values
-presto --cmd convert-format \
-    --var SOURCE=xml \
-    --var TARGET=yaml \
-    --input configs/
-```
-
-### Managing Custom Commands
-
-```bash
-# List all commands
-presto --list-commands
-
-# Show command details
-presto --show-command add-error-handling
-
-# Delete a command
-presto --delete-command convert-format
-
-# Edit a command (creates template file)
-presto --edit-command my-command
-```
-
-Commands are saved in `~/.presto/commands/` as YAML files you can edit directly.
-
-## Generate Mode
-
-Create new files using existing files as context.
-
-### When to Use Generate Mode
-
-- Create documentation from code
-- Generate summaries from multiple files
-- Create new files following existing patterns
-- Extract or transform information across files
-
-### Generate Mode Examples
-
-```bash
-# Create project documentation
-presto --generate \
-    --prompt "Write comprehensive documentation for this Go project" \
-    --context-pattern "*.go" \
-    --context README.md \
-    --output-file docs/API.md
-
-# Generate summary report
-presto --generate \
-    --prompt "Create executive summary of these quarterly reports" \
-    --context-pattern "reports/2024-Q*.txt" \
-    --output-file summary.md
-
-# Create new file following patterns
-presto --generate \
-    --prompt "Create a user service following the same patterns as existing services" \
-    --context-pattern "services/*service.go" \
-    --output-file services/user-service.go
-```
-
-Generate mode requires:
-
-- `--generate` flag
-- `--output-file PATH` for the new file
-- Context files (via `--context` or `--context-pattern`)
-
-## Practical Examples
-
-### Documentation Tasks
-
-```bash
-# Add comments to uncommented code
-presto --cmd add-docs --pattern "\.py$" --recursive
-
-# Generate API documentation from code
-presto --generate \
-    --prompt "Create OpenAPI specification from these route handlers" \
-    --context-pattern "routes/*.js" \
-    --output-file api-spec.yaml
-
-# Create README from existing files
-presto --generate \
-    --prompt "Write a comprehensive README for this project" \
-    --context-pattern "*.py" \
-    --context requirements.txt \
-    --output-file README.md
-```
-
-### Code Improvement
-
-```bash
-# Clean up messy code
-presto --cmd cleanup --input legacy/ --recursive
-
-# Add error handling consistently
-presto --prompt "Add proper error handling following Go best practices" \
-    --context-pattern "*error*.go" \
-    --pattern "\.go$" \
-    --exclude "_test\.go$" \
-    --recursive
-
-# Modernize old code with examples
-presto --prompt "Update this code to use modern Python practices" \
-    --context examples/modern-style.py \
-    --pattern "\.py$" \
-    --input legacy/
-```
-
-### Content Processing
-
-```bash
-# Fix formatting across documents
-presto --prompt "Fix formatting, grammar, and spelling" \
-    --pattern "\.md$" \
-    --recursive
-
-# Convert file formats
-presto --prompt "Convert this YAML to JSON format" \
-    --pattern "\.ya?ml$" \
-    --suffix ".json"
-
-# Standardize data formats
-presto --prompt "Convert all dates to ISO 8601 format" \
-    --pattern "data.*\.txt$" \
-    --recursive
-```
-
-### Analysis and Extraction
-
-```bash
-# Extract specific information
-presto --prompt "Extract all TODO comments and create a task list" \
-    --recursive \
-    --output stdout > todo-list.txt
-
-# Analyze patterns across files
-presto --generate \
-    --prompt "Analyze the error handling patterns and suggest improvements" \
-    --context-pattern "*.go" \
-    --output-file error-analysis.md
-
-# Create summaries
-presto --cmd summarize \
-    --context-pattern "meeting-notes/*.txt" \
-    --output-file weekly-summary.md
-```
-
-## Configuration
-
-Create `~/.presto/config.yaml` to set default options:
+### Example Configuration
 
 ```yaml
-# AI settings
 ai:
-  model: "anthropic/claude-3.5-sonnet"
+  provider: openai
+  api_key: "your-api-key"
+  base_url: "https://api.openai.com/v1"
+  model: "gpt-4"
   max_tokens: 4000
   temperature: 0.1
-  timeout: 60s
+  timeout_seconds: 60
 
-# Default behavior
 defaults:
   max_concurrent: 3
   output_mode: "separate"
   output_suffix: ".presto"
   backup_original: true
+  remove_comments: false
 
-# File filtering
 filters:
-  max_file_size: 1048576 # 1MB max file size
+  max_file_size: 1048576 # 1MB
   exclude_dirs:
     - ".git"
     - "node_modules"
-    - "vendor"
     - "__pycache__"
+    - "vendor"
   exclude_exts:
     - ".exe"
     - ".bin"
-    - ".so"
+    - ".jpg"
+    - ".png"
 ```
 
-Configuration options override built-in defaults but are overridden by command-line flags.
+## 🎪 Creating Custom Commands
 
-## Tips and Best Practices
+### Save Current Options as Command
 
-### Getting Better Results
+```bash
+# Create a custom documentation command
+presto --prompt "Add JSDoc comments with TypeScript types" \
+  --pattern ".*\.(js|jsx)$" \
+  --output separate \
+  --suffix .documented \
+  --save-command js-docs
 
-1. **Be specific in prompts**: "Add detailed docstrings following PEP 257" vs "add docs"
-2. **Provide context**: Include style guides, examples, or related files
-3. **Use appropriate models**: Complex tasks need better models
-4. **Start small**: Test on a few files before processing large directories
+# Use your custom command
+presto --cmd js-docs --input ./src --recursive
+```
 
-### File Processing Tips
+### Command Templates
 
-1. **Use patterns**: Be selective about which files to process
-2. **Check outputs**: Always review AI changes before committing
-3. **Use dry-run**: Preview changes with `--dry-run --verbose`
-4. **Make backups**: Use `--backup` with inplace mode
+Commands are stored as YAML files in `~/.presto/commands/`:
 
-### Performance Tips
+```yaml
+name: "add-api-docs"
+description: "Add OpenAPI/Swagger documentation to REST endpoints"
+mode: "transform"
+prompt: |
+  Add comprehensive OpenAPI/Swagger documentation to this {{LANGUAGE}} file.
+  Include parameter descriptions, response schemas, and example requests/responses.
+  Follow OpenAPI 3.0 specifications.
+options:
+  output_mode: "separate"
+  output_suffix: ".documented"
+  recursive: true
+  context_patterns: ["*.yaml", "*.json"]
+variables:
+  LANGUAGE: "javascript"
+```
 
-1. **Adjust concurrency**: More concurrent jobs = faster processing
-2. **Filter aggressively**: Skip unnecessary files with patterns
-3. **Use appropriate context**: Don't include irrelevant context files
-4. **Choose efficient models**: Faster models for simple tasks
+## 🏗️ Advanced Workflows
 
-## Troubleshooting
+### CI/CD Integration
+
+```bash
+#!/bin/bash
+# .github/workflows/documentation.yml
+
+# Auto-generate documentation on pull requests
+presto --cmd add-docs \
+  --input ./src \
+  --recursive \
+  --output separate \
+  --suffix .autodoc
+
+# Check for outdated documentation
+presto --prompt "Compare this code with its documentation and flag any inconsistencies" \
+  --input ./src \
+  --context "*.md" \
+  --output file \
+  --output-file doc-analysis.md
+```
+
+### Team Consistency
+
+```bash
+# Standardize code style across team
+presto --prompt "Ensure this code follows our team's style guide" \
+  --input . \
+  --recursive \
+  --context ".eslintrc,.prettierrc,STYLE_GUIDE.md" \
+  --output inplace \
+  --backup
+```
+
+### Migration Assistance
+
+```bash
+# Migrate from Vue 2 to Vue 3
+presto --prompt "Migrate this Vue 2 component to Vue 3 Composition API" \
+  --input ./components \
+  --pattern ".*\.vue$" \
+  --context "package.json,migration-notes.md" \
+  --output separate \
+  --suffix .vue3
+```
+
+## 🎯 Supported AI Providers
+
+### OpenAI
+
+```bash
+export OPENAI_API_KEY="your-key"
+# Models: gpt-4, gpt-4-turbo, gpt-3.5-turbo
+```
+
+### Anthropic
+
+```bash
+export ANTHROPIC_API_KEY="your-key"
+# Models: claude-3-5-sonnet, claude-3-haiku
+```
+
+### Local APIs (Ollama, LM Studio, etc.)
+
+```bash
+# No API key needed for local models
+presto configure  # Choose "Local" option
+# Set custom base URL: http://localhost:11434/v1
+```
+
+### Custom APIs
+
+```bash
+# Any OpenAI-compatible API
+export PRESTO_BASE_URL="https://your-api.com/v1"
+export PRESTO_API_KEY="your-key"
+```
+
+## 🎪 Tips and Best Practices
+
+### 1. Start Small
+
+```bash
+# Test on a single file first
+presto --prompt "Add comments" --input example.js --dry-run
+```
+
+### 2. Use Context Wisely
+
+```bash
+# Include relevant context for better results
+presto --cmd add-docs \
+  --input ./api \
+  --context "README.md,package.json,api-spec.yaml"
+```
+
+### 3. Backup Important Files
+
+```bash
+# Always backup when modifying in place
+presto --output inplace --backup
+```
+
+### 4. Leverage Dry Run
+
+```bash
+# Preview changes before applying
+presto --cmd modernize --input ./legacy --dry-run --verbose
+```
+
+### 5. Custom Prompts for Specific Needs
+
+```bash
+# Be specific about requirements
+presto --prompt "Add error handling following our company's error handling guidelines. Include structured logging with correlation IDs." \
+  --context "error-guidelines.md" \
+  --input ./handlers
+```
+
+### 6. Optimize for Large Codebases
+
+```bash
+# Process in batches for large projects
+presto --cmd add-docs \
+  --input ./src \
+  --pattern ".*\.(go|js)$" \
+  --concurrent 5 \
+  --max-tokens 2000
+```
+
+## 🚀 Performance Tips
+
+- **Use file patterns** to avoid processing unnecessary files
+- **Adjust concurrency** based on your system and API limits
+- **Set reasonable token limits** to control costs
+- **Use context selectively** - too much context can confuse the AI
+- **Cache results** by using separate output mode for iterative improvements
+
+## 🎭 Troubleshooting
 
 ### Common Issues
 
-**"No API key found"**
+**"API key not found"**
 
 ```bash
-# Check if key is set
-echo $OPENROUTER_API_KEY
-
-# Set the key
-export OPENROUTER_API_KEY="your-key-here"
+presto configure  # Run interactive setup
 ```
 
-**"No files found to process"**
+**"No files found"**
 
 ```bash
-# Check what files match your pattern
-presto --prompt "test" --pattern "\.py$" --dry-run --verbose
-
-# Verify file paths
-ls -la your-input-path/
+presto --input . --pattern ".*\.js$" --verbose  # Check file patterns
 ```
 
-**"API request failed"**
-
-- Check your internet connection
-- Verify your API key is valid
-- Try a different model with `--model`
-
-**Poor AI results**
-
-- Make prompts more specific
-- Add more context files
-- Try a higher-quality model
-- Lower temperature for more focused results
-
-### Getting Help
+**"Request timeout"**
 
 ```bash
-# Show all options
-presto --help
+# Increase timeout in config or use smaller files
+--max-tokens 2000
+```
 
-# List available commands
-presto --list-commands
+**"Rate limit exceeded"**
 
-# Show what a command does
-presto --show-command COMMAND_NAME
+```bash
+# Reduce concurrency
+--concurrent 1
 ```
 
 ### Debug Mode
 
-Use these flags to understand what's happening:
+```bash
+presto --verbose --dry-run  # See what will be processed
+```
+
+---
+
+## Quick Reference
 
 ```bash
-# See what files would be processed
-presto --dry-run --verbose --recursive --input .
+# PRESTO COMMAND REFERENCE
 
-# Test with a single file first
-presto --prompt "test" --input single-file.txt --verbose
+# ======================
+# BASIC USAGE
+# ======================
 
-# Check AI response without saving
-presto --prompt "test" --input file.txt --output stdout
+# Interactive setup
+presto configure
+
+# Basic file transformation
+presto --prompt "Your instruction" --input file.js
+presto --prompt "Add comments" --input . --recursive
+
+# Use predefined commands
+presto --cmd COMMAND_NAME --input PATH [options]
+
+# Generate new content
+presto --generate --prompt "Create README" --context "*.go" --output-file README.md
+
+# ======================
+# BUILT-IN COMMANDS
+# ======================
+
+presto --cmd add-docs      # Add comprehensive documentation
+presto --cmd add-logging   # Add structured logging statements
+presto --cmd optimize      # Optimize for performance/readability
+presto --cmd modernize     # Update to current best practices
+presto --cmd cleanup       # Clean and format code
+presto --cmd explain       # Add explanatory comments
+presto --cmd summarize     # Create summary (generate mode)
+presto --cmd convert       # Convert format/language
+
+# ======================
+# INPUT/OUTPUT OPTIONS
+# ======================
+
+--input PATH               # File or directory to process
+--output MODE              # inplace|separate|stdout|file
+--output-file PATH         # Output file path (generate mode)
+--suffix SUFFIX            # Suffix for separate mode (default: .presto)
+--recursive                # Process directories recursively
+--backup                   # Create .backup files (with inplace mode)
+
+# ======================
+# FILE FILTERING
+# ======================
+
+--pattern "REGEX"          # Include files matching pattern
+--exclude "REGEX"          # Exclude files matching pattern
+--context "file1,file2"    # Context files (comma-separated)
+--context-pattern "*.md"   # Context file patterns
+--remove-comments          # Strip comments before processing
+
+# Examples:
+--pattern ".*\.(js|jsx|ts|tsx)$"
+--exclude ".*\.(test|spec)\.js$"
+--context "package.json,README.md,*.config.js"
+
+# ======================
+# AI CONFIGURATION
+# ======================
+
+--prompt "TEXT"            # AI instruction prompt
+--prompt-file PATH         # File containing prompt
+--model MODEL_NAME         # Override default model
+--temperature 0.1          # Creativity level (0.0-2.0)
+--max-tokens 4000          # Maximum response tokens
+
+# Models:
+# OpenAI: gpt-4, gpt-4-turbo, gpt-3.5-turbo
+# Anthropic: claude-3-5-sonnet, claude-3-haiku
+# Local: depends on your setup
+
+# ======================
+# PROCESSING OPTIONS
+# ======================
+
+--concurrent 3             # Max parallel file processing
+--dry-run                  # Preview without changes
+--verbose                  # Detailed output
+--generate                 # Generate mode (vs transform)
+
+# ======================
+# CUSTOM COMMANDS
+# ======================
+
+# Save current options as reusable command
+--save-command NAME
+
+# Use variables in commands
+--var "KEY=value,KEY2=value2"
+
+# Manage custom commands
+--list-commands            # Show all available commands
+--show-command NAME        # Show command details
+--delete-command NAME      # Remove custom command
+
+# ======================
+# ENVIRONMENT VARIABLES
+# ======================
+
+export OPENAI_API_KEY="your-key"
+export ANTHROPIC_API_KEY="your-key"
+export OPENROUTER_API_KEY="your-key"  # Legacy support
+export PRESTO_API_KEY="your-key"      # Generic
+export PRESTO_BASE_URL="custom-url"   # Custom API endpoint
+export PRESTO_MODEL="model-name"      # Default model
+
+# ======================
+# COMMON WORKFLOWS
+# ======================
+
+# Add docs to entire project
+presto --cmd add-docs --input . --recursive --backup
+
+# Modernize JavaScript files
+presto --cmd modernize --input ./src --pattern ".*\.js$" --output separate
+
+# Generate README from codebase
+presto --cmd summarize --context "*.go,*.md" --output-file README.md
+
+# Add logging to API handlers
+presto --cmd add-logging --input ./handlers --recursive --output inplace --backup
+
+# Convert code format with variables
+presto --cmd convert --var "TARGET_FORMAT=typescript" --input api.js
+
+# Clean up legacy code
+presto --cmd cleanup --input ./legacy --exclude ".*\.min\.js$" --recursive
+
+# Optimize database queries
+presto --prompt "Optimize SQL performance" --input ./queries --context "schema.sql"
+
+# Custom documentation with context
+presto --prompt "Add JSDoc with TypeScript types" --input ./src --context "types.d.ts" --pattern ".*\.js$" --save-command js-typed-docs
+
+# ======================
+# HELP COMMANDS
+# ======================
+
+presto --help             # Show basic help
+presto --version          # Show version
+presto --list-commands    # List all commands
+presto --show-command NAME # Show command details
+
+# ======================
+# EXAMPLES BY FILE TYPE
+# ======================
+
+# JavaScript/TypeScript
+presto --cmd modernize --input . --pattern ".*\.(js|jsx|ts|tsx)$"
+
+# Python
+presto --cmd add-logging --input . --pattern ".*\.py$" --exclude "__pycache__"
+
+# Go
+presto --cmd add-docs --input . --pattern ".*\.go$" --exclude ".*_test\.go$"
+
+# SQL
+presto --prompt "Add comments and optimize" --input . --pattern ".*\.sql$"
+
+# Multiple languages
+presto --cmd cleanup --input . --pattern "\.(js|py|go|java)$" --recursive
+
 ```
+
+---
+
+## 🤝 Contributing
+
+We welcome contributions! Whether it's:
+
+- 🐛 Bug fixes
+- ✨ New features
+- 📚 Documentation improvements
+- 🎭 New built-in commands
+- 🎯 Provider integrations
+
+Check out [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+## 📜 License
+
+MIT License - see [LICENSE](LICENSE) file for details.

@@ -7,143 +7,94 @@ import (
 	"os"
 	"strings"
 
-	types "github.com/Zachacious/presto/commands"
 	"github.com/Zachacious/presto/internal/commands"
 	"github.com/Zachacious/presto/internal/config"
 	"github.com/Zachacious/presto/internal/processor"
+	"github.com/Zachacious/presto/pkg/types"
 )
 
-const version = "1.0.0"
-const banner = `🎩 presto v%s - Transform your files like magic!`
-
-type arrayFlags []string
-
-func (i *arrayFlags) String() string {
-	return strings.Join(*i, ", ")
-}
-
-func (i *arrayFlags) Set(value string) error {
-	*i = append(*i, value)
-	return nil
-}
-
-type varFlags map[string]string
-
-func (v varFlags) String() string {
-	var parts []string
-	for k, val := range v {
-		parts = append(parts, fmt.Sprintf("%s=%s", k, val))
-	}
-	return strings.Join(parts, ", ")
-}
-
-func (v varFlags) Set(value string) error {
-	parts := strings.SplitN(value, "=", 2)
-	if len(parts) != 2 {
-		return fmt.Errorf("variables must be in format KEY=VALUE")
-	}
-	v[parts[0]] = parts[1]
-	return nil
-}
+const (
+	version = "0.1.0"
+)
 
 func main() {
-	// Command management flags
+	// Command-line flags
 	var (
-		useCommand    = flag.String("cmd", "", "Use a prefab command")
+		showVersion   = flag.Bool("version", false, "Show version information")
+		showHelp      = flag.Bool("help", false, "Show help information")
 		listCommands  = flag.Bool("list-commands", false, "List all available commands")
-		saveCommand   = flag.String("save-command", "", "Save current options as a command")
-		deleteCommand = flag.String("delete-command", "", "Delete a saved command")
-		showCommand   = flag.String("show-command", "", "Show details of a command")
-		editCommand   = flag.String("edit-command", "", "Create/edit a command interactively")
-		variables     = make(varFlags)
+		showCommand   = flag.String("show-command", "", "Show details for a specific command")
+		deleteCommand = flag.String("delete-command", "", "Delete a user command")
+		editCommand   = flag.String("edit-command", "", "Edit a user command")
+
+		// Processing options
+		promptText     = flag.String("prompt", "", "AI prompt text")
+		promptFile     = flag.String("prompt-file", "", "File containing AI prompt")
+		commandName    = flag.String("cmd", "", "Use a predefined command")
+		inputPath      = flag.String("input", "", "Input file or directory path")
+		outputPath     = flag.String("output-file", "", "Output file path (for generate mode)")
+		outputMode     = flag.String("output", "separate", "Output mode: inplace|separate|stdout|file")
+		outputSuffix   = flag.String("suffix", ".presto", "Suffix for output files in separate mode")
+		recursive      = flag.Bool("recursive", false, "Process directories recursively")
+		filePattern    = flag.String("pattern", "", "File pattern regex to match")
+		excludePattern = flag.String("exclude", "", "File pattern regex to exclude")
+		generateMode   = flag.Bool("generate", false, "Generate new content instead of transforming")
+		removeComments = flag.Bool("remove-comments", false, "Remove comments from input before processing")
+
+		// Context options
+		contextFiles    = flag.String("context", "", "Comma-separated context file paths")
+		contextPatterns = flag.String("context-pattern", "", "Comma-separated context file patterns")
+
+		// AI options
+		model       = flag.String("model", "", "AI model to use")
+		temperature = flag.Float64("temperature", 0, "AI temperature (0.0-2.0)")
+		maxTokens   = flag.Int("max-tokens", 0, "Maximum tokens for AI response")
+
+		// Processing options
+		dryRun         = flag.Bool("dry-run", false, "Show what would be done without making changes")
+		verbose        = flag.Bool("verbose", false, "Verbose output")
+		maxConcurrent  = flag.Int("concurrent", 3, "Maximum concurrent file processing")
+		backupOriginal = flag.Bool("backup", false, "Create backup of original files")
+		saveCommandAs  = flag.String("save-command", "", "Save current options as a named command")
+
+		// Variable substitution
+		variables = flag.String("var", "", "Variables for command substitution (VAR=value,VAR2=value2)")
 	)
 
-	// Processing flags
-	var (
-		promptText      = flag.String("prompt", "", "AI prompt to apply")
-		promptFile      = flag.String("prompt-file", "", "Load AI prompt from file")
-		inputPath       = flag.String("input", ".", "Input file or directory")
-		outputPath      = flag.String("output-file", "", "Output file (for generate mode)")
-		outputMode      = flag.String("output", "separate", "Output mode: inplace, separate, stdout, file")
-		outputSuffix    = flag.String("suffix", ".presto", "Suffix for separate output files")
-		recursive       = flag.Bool("recursive", false, "Process directories recursively")
-		filePattern     = flag.String("pattern", "", "Pattern for files to include")
-		excludePattern  = flag.String("exclude", "", "Pattern for files to exclude")
-		contextFiles    arrayFlags
-		contextPatterns arrayFlags
-		removeComments  = flag.Bool("remove-comments", false, "Remove comments before processing")
-		dryRun          = flag.Bool("dry-run", false, "Show what would be processed")
-		verbose         = flag.Bool("verbose", false, "Verbose output")
-		maxConcurrent   = flag.Int("concurrent", 3, "Maximum concurrent processing")
-		backupOriginal  = flag.Bool("backup", false, "Create backup when using inplace mode")
-		model           = flag.String("model", "", "AI model to use")
-		temperature     = flag.Float64("temperature", 0, "AI temperature (0.0-2.0)")
-		maxTokens       = flag.Int("max-tokens", 0, "Maximum AI tokens")
-	)
-
-	// Utility flags
-	var (
-		showVersion  = flag.Bool("version", false, "Show version")
-		showHelp     = flag.Bool("help", false, "Show help")
-		listModels   = flag.Bool("list-models", false, "List available AI models")
-		generateMode = flag.Bool("generate", false, "Generate new file from context (instead of transform)")
-		listPrompts  = flag.Bool("list-prompts", false, "List built-in prompt templates")
-		savePrompt   = flag.String("save-prompt", "", "Save built-in prompt to file: name:path")
-		configPath   = flag.String("config", "", "Configuration file path")
-	)
-
-	flag.Var(&contextFiles, "context", "Context files (can be repeated)")
-	flag.Var(&contextPatterns, "context-pattern", "Context file patterns (can be repeated)")
-	flag.Var(&variables, "var", "Variables for command substitution KEY=VALUE (can be repeated)")
+	// Handle configure command first (before flag parsing)
+	if len(os.Args) > 1 && os.Args[1] == "configure" {
+		if err := config.ConfigureInteractive(); err != nil {
+			log.Fatalf("❌ Configuration failed: %v", err)
+		}
+		return
+	}
 
 	flag.Parse()
 
 	// Handle utility commands first
 	if *showVersion {
-		fmt.Printf(banner+"\n", version)
+		fmt.Printf("Presto v%s\n", version)
 		return
 	}
 
 	if *showHelp {
-		showUsage()
+		showHelpText()
 		return
-	}
-
-	if *listModels {
-		showModels()
-		return
-	}
-
-	if *listPrompts {
-		showPrompts()
-		return
-	}
-
-	if *savePrompt != "" {
-		handleSavePrompt(*savePrompt)
-		return
-	}
-
-	// Load configuration
-	cfg, err := config.LoadConfig(*configPath)
-	if err != nil {
-		log.Fatalf("❌ Failed to load config: %v", err)
 	}
 
 	// Initialize command manager
 	cmdManager, err := commands.New()
 	if err != nil {
-		log.Fatalf("❌ Failed to initialize commands: %v", err)
+		log.Fatalf("❌ Failed to initialize command manager: %v", err)
 	}
 
-	// Handle command management
 	if *listCommands {
-		showCommands(cmdManager)
+		handleListCommands(cmdManager)
 		return
 	}
 
 	if *showCommand != "" {
-		showCommandDetails(cmdManager, *showCommand)
+		handleShowCommand(cmdManager, *showCommand)
 		return
 	}
 
@@ -157,7 +108,53 @@ func main() {
 		return
 	}
 
-	// Build processing options
+	// Load configuration
+	cfg, err := config.LoadConfig("")
+	if err != nil {
+		log.Fatalf("❌ Failed to load configuration: %v", err)
+	}
+
+	// Validate configuration
+	if err := config.ValidateConfig(cfg); err != nil {
+		fmt.Printf("❌ Configuration error: %v\n\n", err)
+		fmt.Println("To fix this, you can:")
+		fmt.Println("1. Run: presto configure")
+		fmt.Println("2. Set environment variable: export OPENAI_API_KEY=\"your-key\"")
+		fmt.Println("3. Edit config file: ~/.presto/config.yaml")
+		os.Exit(1)
+	}
+
+	// Parse context files and patterns
+	var contextFileList []string
+	var contextPatternList []string
+
+	if *contextFiles != "" {
+		contextFileList = strings.Split(*contextFiles, ",")
+		for i, file := range contextFileList {
+			contextFileList[i] = strings.TrimSpace(file)
+		}
+	}
+
+	if *contextPatterns != "" {
+		contextPatternList = strings.Split(*contextPatterns, ",")
+		for i, pattern := range contextPatternList {
+			contextPatternList[i] = strings.TrimSpace(pattern)
+		}
+	}
+
+	// Parse variables
+	varMap := make(map[string]string)
+	if *variables != "" {
+		pairs := strings.Split(*variables, ",")
+		for _, pair := range pairs {
+			parts := strings.SplitN(strings.TrimSpace(pair), "=", 2)
+			if len(parts) == 2 {
+				varMap[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
+			}
+		}
+	}
+
+	// Build processing options - use types.ProcessingOptions
 	opts := &types.ProcessingOptions{
 		Mode:            types.ModeTransform,
 		AIPrompt:        *promptText,
@@ -165,8 +162,9 @@ func main() {
 		InputPath:       *inputPath,
 		OutputPath:      *outputPath,
 		OutputMode:      types.OutputMode(*outputMode),
-		ContextFiles:    contextFiles,
-		ContextPatterns: contextPatterns,
+		OutputSuffix:    *outputSuffix,
+		ContextFiles:    contextFileList,
+		ContextPatterns: contextPatternList,
 		Recursive:       *recursive,
 		FilePattern:     *filePattern,
 		ExcludePattern:  *excludePattern,
@@ -175,75 +173,97 @@ func main() {
 		Verbose:         *verbose,
 		MaxConcurrent:   *maxConcurrent,
 		BackupOriginal:  *backupOriginal,
-		OutputSuffix:    *outputSuffix,
 		Model:           *model,
 		Temperature:     *temperature,
 		MaxTokens:       *maxTokens,
 	}
 
-	// Set mode
 	if *generateMode {
 		opts.Mode = types.ModeGenerate
 	}
 
-	// Apply prefab command if specified
-	if *useCommand != "" {
-		cmd, err := cmdManager.GetCommand(*useCommand)
-		if err != nil {
-			log.Fatalf("❌ %v", err)
+	// Apply command if specified
+	if *commandName != "" {
+		if err := cmdManager.ApplyCommand(*commandName, opts); err != nil {
+			log.Fatalf("❌ Failed to apply command '%s': %v", *commandName, err)
 		}
 
-		// Substitute variables
-		cmdManager.SubstituteVariables(cmd, variables)
-
-		// Apply command to options
-		if err := cmdManager.ApplyCommand(*useCommand, opts); err != nil {
-			log.Fatalf("❌ Failed to apply command: %v", err)
-		}
-
-		if *verbose {
-			fmt.Printf("📋 Using command: %s - %s\n", cmd.Name, cmd.Description)
+		// Apply variable substitutions if command supports them
+		if cmd, err := cmdManager.GetCommand(*commandName); err == nil && len(varMap) > 0 {
+			cmdManager.SubstituteVariables(cmd, varMap)
+			opts.AIPrompt = cmd.Prompt
+			opts.PromptFile = cmd.PromptFile
 		}
 	}
 
-	// Save command if requested
-	if *saveCommand != "" {
-		handleSaveCommand(cmdManager, *saveCommand, opts)
+	// Validate required options
+	if opts.AIPrompt == "" && opts.PromptFile == "" {
+		log.Fatal("❌ Either --prompt or --prompt-file is required")
+	}
+
+	if opts.InputPath == "" && opts.Mode == types.ModeTransform {
+		log.Fatal("❌ --input is required for transform mode")
+	}
+
+	if opts.OutputPath == "" && opts.Mode == types.ModeGenerate {
+		log.Fatal("❌ --output-file is required for generate mode")
+	}
+
+	// Handle save command option
+	if *saveCommandAs != "" {
+		handleSaveCommand(cmdManager, *saveCommandAs, opts)
 		return
 	}
 
-	// Validate required parameters
-	if opts.AIPrompt == "" && opts.PromptFile == "" {
-		fmt.Fprintf(os.Stderr, "❌ Error: Either --prompt, --prompt-file, or --cmd is required\n")
-		showUsage()
-		os.Exit(1)
+	// Handle missing API key gracefully
+	if cfg.AI.APIKey == "" {
+		fmt.Println("⚠️  No OpenRouter API key found.")
+		fmt.Println("You can:")
+		fmt.Println("1. Set environment variable: export OPENROUTER_API_KEY=\"your-key\"")
+		fmt.Println("2. Add to config file: ~/.presto/config.yaml")
+		fmt.Println("3. Use --api-key flag")
+		fmt.Println("4. Run 'presto setup' for interactive configuration")
+		fmt.Println()
+		fmt.Print("Enter API key now (or Ctrl+C to exit): ")
+
+		var apiKey string
+		if _, err := fmt.Scanln(&apiKey); err != nil {
+			log.Fatal("❌ API key required")
+		}
+
+		cfg.AI.APIKey = strings.TrimSpace(apiKey)
+		if cfg.AI.APIKey == "" {
+			log.Fatal("❌ API key cannot be empty")
+		}
+
+		// Ask if they want to save it
+		fmt.Print("💾 Save API key to config file? (y/N): ")
+		var save string
+		fmt.Scanln(&save)
+		if strings.ToLower(save) == "y" || strings.ToLower(save) == "yes" {
+			if err := config.SaveAPIKey(cfg.AI.APIKey); err != nil {
+				fmt.Printf("⚠️  Failed to save API key: %v\n", err)
+			} else {
+				fmt.Println("✅ API key saved to ~/.presto/config.yaml")
+			}
+		}
 	}
 
-	// Validate output mode
-	if !isValidOutputMode(string(opts.OutputMode)) {
-		log.Fatalf("❌ Invalid output mode: %s", opts.OutputMode)
+	// Apply config defaults to options that weren't explicitly set
+	if opts.Model == "" {
+		opts.Model = cfg.AI.Model
+	}
+	if opts.Temperature == 0 {
+		opts.Temperature = cfg.AI.Temperature
+	}
+	if opts.MaxTokens == 0 {
+		opts.MaxTokens = cfg.AI.MaxTokens
 	}
 
-	// Override model if specified
-	if opts.Model != "" {
-		cfg.AI.Model = opts.Model
-	}
-	if opts.Temperature != 0 {
-		cfg.AI.Temperature = opts.Temperature
-	}
-	if opts.MaxTokens != 0 {
-		cfg.AI.MaxTokens = opts.MaxTokens
-	}
-
-	// Create processor
+	// Initialize processor
 	proc, err := processor.New(cfg)
 	if err != nil {
-		log.Fatalf("❌ Failed to create processor: %v", err)
-	}
-
-	// Show processing info
-	if *verbose {
-		showProcessingInfo(opts, cfg)
+		log.Fatalf("❌ Failed to initialize processor: %v", err)
 	}
 
 	// Process files
@@ -252,219 +272,11 @@ func main() {
 		log.Fatalf("❌ Processing failed: %v", err)
 	}
 
-	// Show summary
-	showSummary(results, *verbose)
+	// Show results
+	showSummary(results, opts.Verbose)
 }
 
-func isValidOutputMode(mode string) bool {
-	validModes := []string{"inplace", "separate", "stdout", "file"}
-	for _, valid := range validModes {
-		if mode == valid {
-			return true
-		}
-	}
-	return false
-}
-
-func showCommands(cmdManager *commands.Manager) {
-	fmt.Println("📋 Available Commands:")
-	fmt.Println()
-
-	builtins := cmdManager.GetBuiltinCommands()
-	user := cmdManager.GetUserCommands()
-
-	if len(builtins) > 0 {
-		fmt.Println("🔧 Built-in Commands:")
-		for name, cmd := range builtins {
-			fmt.Printf("  %-15s %s\n", name, cmd.Description)
-		}
-		fmt.Println()
-	}
-
-	if len(user) > 0 {
-		fmt.Println("👤 User Commands:")
-		for name, cmd := range user {
-			fmt.Printf("  %-15s %s\n", name, cmd.Description)
-		}
-		fmt.Println()
-	}
-
-	fmt.Println("Usage:")
-	fmt.Println("  presto --cmd COMMAND_NAME [options]")
-	fmt.Println("  presto --show-command COMMAND_NAME")
-}
-
-func showCommandDetails(cmdManager *commands.Manager, name string) {
-	cmd, err := cmdManager.GetCommand(name)
-	if err != nil {
-		log.Fatalf("❌ %v", err)
-	}
-
-	fmt.Printf("📋 Command: %s\n", cmd.Name)
-	fmt.Printf("Description: %s\n", cmd.Description)
-	fmt.Printf("Mode: %s\n", cmd.Mode)
-
-	isBuiltin := cmdManager.IsBuiltin(name)
-	if isBuiltin {
-		fmt.Printf("Type: Built-in\n")
-	} else {
-		fmt.Printf("Type: User-defined\n")
-	}
-	fmt.Println()
-
-	if cmd.Prompt != "" {
-		fmt.Printf("Prompt:\n%s\n\n", cmd.Prompt)
-	}
-	if cmd.PromptFile != "" {
-		fmt.Printf("Prompt File: %s\n\n", cmd.PromptFile)
-	}
-
-	fmt.Println("Options:")
-	if cmd.Options.OutputMode != "" {
-		fmt.Printf("  Output Mode: %s\n", cmd.Options.OutputMode)
-	}
-	if cmd.Options.OutputSuffix != "" {
-		fmt.Printf("  Output Suffix: %s\n", cmd.Options.OutputSuffix)
-	}
-	if cmd.Options.FilePattern != "" {
-		fmt.Printf("  File Pattern: %s\n", cmd.Options.FilePattern)
-	}
-	if cmd.Options.ExcludePattern != "" {
-		fmt.Printf("  Exclude Pattern: %s\n", cmd.Options.ExcludePattern)
-	}
-	if len(cmd.Options.ContextPatterns) > 0 {
-		fmt.Printf("  Context Patterns: %v\n", cmd.Options.ContextPatterns)
-	}
-	if len(cmd.Options.ContextFiles) > 0 {
-		fmt.Printf("  Context Files: %v\n", cmd.Options.ContextFiles)
-	}
-	if cmd.Options.Recursive {
-		fmt.Printf("  Recursive: true\n")
-	}
-	if cmd.Options.RemoveComments {
-		fmt.Printf("  Remove Comments: true\n")
-	}
-	if cmd.Options.BackupOriginal {
-		fmt.Printf("  Backup Original: true\n")
-	}
-
-	if len(cmd.Variables) > 0 {
-		fmt.Println("\nVariables:")
-		for key, value := range cmd.Variables {
-			fmt.Printf("  %s: %s\n", key, value)
-		}
-	}
-
-	fmt.Println("\nUsage:")
-	fmt.Printf("  presto --cmd %s [options]\n", cmd.Name)
-	if len(cmd.Variables) > 0 {
-		fmt.Printf("  presto --cmd %s", cmd.Name)
-		for key := range cmd.Variables {
-			fmt.Printf(" --var %s=value", key)
-		}
-		fmt.Println()
-	}
-}
-
-func handleDeleteCommand(cmdManager *commands.Manager, name string) {
-	if cmdManager.IsBuiltin(name) {
-		log.Fatalf("❌ Cannot delete built-in command: %s", name)
-	}
-
-	if err := cmdManager.DeleteCommand(name); err != nil {
-		log.Fatalf("❌ Failed to delete command: %v", err)
-	}
-	fmt.Printf("✅ Command '%s' deleted\n", name)
-}
-
-func handleSaveCommand(cmdManager *commands.Manager, name string, opts *types.ProcessingOptions) {
-	cmd := &types.Command{
-		Name:        name,
-		Description: fmt.Sprintf("Custom command: %s", name),
-		Mode:        opts.Mode,
-		Prompt:      opts.AIPrompt,
-		PromptFile:  opts.PromptFile,
-		Options: types.CommandOptions{
-			OutputMode:      string(opts.OutputMode),
-			OutputSuffix:    opts.OutputSuffix,
-			FilePattern:     opts.FilePattern,
-			ExcludePattern:  opts.ExcludePattern,
-			ContextPatterns: opts.ContextPatterns,
-			ContextFiles:    opts.ContextFiles,
-			Recursive:       opts.Recursive,
-			RemoveComments:  opts.RemoveComments,
-			BackupOriginal:  opts.BackupOriginal,
-			Model:           opts.Model,
-			Temperature:     opts.Temperature,
-			MaxTokens:       opts.MaxTokens,
-		},
-	}
-
-	if err := cmdManager.SaveCommand(cmd); err != nil {
-		log.Fatalf("❌ Failed to save command: %v", err)
-	}
-
-	fmt.Printf("✅ Command '%s' saved\n", name)
-	fmt.Printf("Usage: presto --cmd %s\n", name)
-}
-
-func handleEditCommand(cmdManager *commands.Manager, name string) {
-	cmd := cmdManager.GenerateCommandTemplate(name)
-	if err := cmdManager.SaveCommand(cmd); err != nil {
-		log.Fatalf("❌ Failed to create command template: %v", err)
-	}
-
-	homeDir, _ := os.UserHomeDir()
-	fmt.Printf("✅ Command template '%s' created\n", name)
-	fmt.Printf("Edit: %s/.presto/commands/%s.yaml\n", homeDir, name)
-}
-
-func handleSavePrompt(savePrompt string) {
-	// This would use the prompts loader, but keeping simple for now
-	fmt.Printf("❌ Save prompt feature not implemented in this version\n")
-	fmt.Printf("Use --list-prompts to see available templates\n")
-}
-
-func showPrompts() {
-	fmt.Println("🎭 Built-in Prompt Templates:")
-	fmt.Println()
-	fmt.Println("  add-docs           Add comprehensive documentation")
-	fmt.Println("  add-error-handling Add robust error handling")
-	fmt.Println("  optimize           Optimize for performance and readability")
-	fmt.Println("  modernize          Update to current best practices")
-	fmt.Println("  refactor           Improve maintainability")
-	fmt.Println("  add-tests          Generate comprehensive tests")
-	fmt.Println("  convert-language   Convert to different language")
-	fmt.Println()
-	fmt.Println("Use these with built-in commands:")
-	fmt.Println("  presto --cmd add-docs --recursive")
-	fmt.Println("  presto --cmd js2ts --input src/")
-}
-
-func showProcessingInfo(opts *types.ProcessingOptions, cfg *config.Config) {
-	fmt.Printf("🎩 Processing with presto:\n")
-	fmt.Printf("  Mode: %s\n", opts.Mode)
-	fmt.Printf("  Input: %s\n", opts.InputPath)
-	if opts.OutputPath != "" {
-		fmt.Printf("  Output File: %s\n", opts.OutputPath)
-	} else {
-		fmt.Printf("  Output Mode: %s\n", opts.OutputMode)
-	}
-	fmt.Printf("  AI Model: %s\n", cfg.AI.Model)
-	if len(opts.ContextFiles) > 0 || len(opts.ContextPatterns) > 0 {
-		fmt.Printf("  Context: %d files, %d patterns\n", len(opts.ContextFiles), len(opts.ContextPatterns))
-	}
-	if opts.FilePattern != "" {
-		fmt.Printf("  File Pattern: %s\n", opts.FilePattern)
-	}
-	if opts.ExcludePattern != "" {
-		fmt.Printf("  Exclude Pattern: %s\n", opts.ExcludePattern)
-	}
-	fmt.Printf("  Recursive: %v\n", opts.Recursive)
-	fmt.Printf("  Dry Run: %v\n", opts.DryRun)
-	fmt.Println()
-}
-
+// showSummary displays processing results - use types.ProcessingResult
 func showSummary(results []*types.ProcessingResult, verbose bool) {
 	successful := 0
 	failed := 0
@@ -520,113 +332,132 @@ func showSummary(results []*types.ProcessingResult, verbose bool) {
 	}
 
 	if successful > 0 {
-		fmt.Printf("\n🎉 Presto! Your files have been magically transformed!\n")
+		fmt.Printf("\n✨ Processing complete!\n")
 	}
 }
 
-func showUsage() {
-	fmt.Printf(banner+"\n\n", version)
-	fmt.Printf(`Usage:
+// handleSaveCommand saves current options as a command - use types.Command
+func handleSaveCommand(cmdManager *commands.Manager, name string, opts *types.ProcessingOptions) {
+	cmd := &types.Command{
+		Name:        name,
+		Description: fmt.Sprintf("Custom command: %s", name),
+		Mode:        opts.Mode,
+		Prompt:      opts.AIPrompt,
+		PromptFile:  opts.PromptFile,
+		Options: types.CommandOptions{
+			OutputMode:      string(opts.OutputMode),
+			OutputSuffix:    opts.OutputSuffix,
+			FilePattern:     opts.FilePattern,
+			ExcludePattern:  opts.ExcludePattern,
+			ContextPatterns: opts.ContextPatterns,
+			ContextFiles:    opts.ContextFiles,
+			Recursive:       opts.Recursive,
+			RemoveComments:  opts.RemoveComments,
+			BackupOriginal:  opts.BackupOriginal,
+			Model:           opts.Model,
+			Temperature:     opts.Temperature,
+			MaxTokens:       opts.MaxTokens,
+		},
+	}
+
+	if err := cmdManager.SaveCommand(cmd); err != nil {
+		log.Fatalf("❌ Failed to save command: %v", err)
+	}
+
+	fmt.Printf("✅ Command '%s' saved\n", name)
+	fmt.Printf("Usage: presto --cmd %s\n", name)
+}
+
+func handleListCommands(cmdManager *commands.Manager) {
+	fmt.Println("📋 Available Commands:")
+	fmt.Println()
+
+	fmt.Println("Built-in Commands:")
+	builtins := cmdManager.GetBuiltinCommands()
+	for name, cmd := range builtins {
+		fmt.Printf("  %s - %s\n", name, cmd.Description)
+	}
+
+	fmt.Println()
+	fmt.Println("User Commands:")
+	userCmds := cmdManager.GetUserCommands()
+	if len(userCmds) == 0 {
+		fmt.Println("  (none)")
+	} else {
+		for name, cmd := range userCmds {
+			fmt.Printf("  %s - %s\n", name, cmd.Description)
+		}
+	}
+}
+
+func handleShowCommand(cmdManager *commands.Manager, name string) {
+	cmd, err := cmdManager.GetCommand(name)
+	if err != nil {
+		log.Fatalf("❌ %v", err)
+	}
+
+	fmt.Printf("📋 Command: %s\n", cmd.Name)
+	fmt.Printf("Description: %s\n", cmd.Description)
+	fmt.Printf("Mode: %s\n", cmd.Mode)
+	fmt.Printf("Prompt: %s\n", cmd.Prompt)
+	if cmd.PromptFile != "" {
+		fmt.Printf("Prompt File: %s\n", cmd.PromptFile)
+	}
+
+	if len(cmd.Variables) > 0 {
+		fmt.Println("Variables:")
+		for k, v := range cmd.Variables {
+			fmt.Printf("  %s=%s\n", k, v)
+		}
+	}
+
+	fmt.Printf("Built-in: %t\n", cmdManager.IsBuiltin(name))
+}
+
+func handleDeleteCommand(cmdManager *commands.Manager, name string) {
+	if err := cmdManager.DeleteCommand(name); err != nil {
+		log.Fatalf("❌ Failed to delete command: %v", err)
+	}
+	fmt.Printf("✅ Command '%s' deleted\n", name)
+}
+
+func handleEditCommand(cmdManager *commands.Manager, name string) {
+	// Create a template command file for editing
+	// templatePath := fmt.Sprintf("%s.yaml", name)
+
+	var cmd *types.Command
+	if existingCmd, err := cmdManager.GetCommand(name); err == nil {
+		cmd = existingCmd
+	} else {
+		cmd = cmdManager.GenerateCommandTemplate(name)
+	}
+
+	// Write template to file for editing
+	// User can then load it with save-command option
+	fmt.Printf("Edit template created for command '%s'\n", name)
+	fmt.Printf("Modify the template and use --save-command to save changes\n")
+	fmt.Printf("Template: %+v\n", cmd)
+}
+
+func showHelpText() {
+	fmt.Printf(`Presto v%s - AI File Processor
+
+USAGE:
   presto [options]
-  presto --cmd COMMAND_NAME [options]
 
-🎭 Command Management:
-  --cmd NAME               Use a prefab command
-  --list-commands         List all available commands  
-  --show-command NAME     Show command details
-  --save-command NAME     Save current options as a command
-  --delete-command NAME   Delete a saved command
-  --edit-command NAME     Create command template
-
-✨ Processing Options:
-  --prompt TEXT           AI prompt to apply
-  --prompt-file FILE      Load AI prompt from file
-  --input PATH            Input file or directory (default ".")
-  --output-file PATH      Output file for generate mode
-  --output MODE           Output mode: inplace, separate, stdout, file
-  --suffix TEXT           Suffix for separate files (default ".presto")
-
-🎯 Targeting:
-  --pattern REGEX         Include files matching pattern
-  --exclude REGEX         Exclude files matching pattern
+BASIC OPTIONS:
+  --prompt TEXT           AI instruction text
+  --cmd NAME             Use predefined command
+  --input PATH           File or directory to process
   --recursive            Process directories recursively
-  --generate             Generate new file (instead of transform)
+  --output MODE          Output mode: inplace|separate|stdout|file
+  --dry-run              Preview without making changes
 
-🔍 Context:
-  --context FILE          Context files (repeatable)
-  --context-pattern REGEX Context file patterns (repeatable)
+EXAMPLES:
+  presto --prompt "Add comments" --input main.go
+  presto --cmd add-docs --input . --recursive
+  presto --generate --prompt "Create README" --context *.go --output-file README.md
 
-🛠️  Processing:
-  --remove-comments       Remove comments before processing
-  --concurrent N          Max concurrent processing (default 3)
-  --backup               Create backup for inplace mode
-
-🤖 AI Options:
-  --model NAME           AI model to use
-  --temperature N        AI temperature 0.0-2.0
-  --max-tokens N         Maximum AI tokens
-
-🔧 Variables & Config:
-  --var KEY=VALUE        Variables for command substitution
-  --config FILE          Configuration file path
-
-ℹ️  Utility:
-  --dry-run              Show what would be processed
-  --verbose              Verbose output
-  --list-models          List available AI models
-  --list-prompts         List built-in prompt templates
-  --version              Show version
-  --help                 Show this help
-
-🌟 Examples:
-
-  # Use built-in commands
-  presto --cmd add-docs --recursive
-  presto --cmd js2ts --input src/
-
-  # Generate new service from patterns
-  presto --generate --prompt "Create user service" \
-         --context-pattern "*service*.go" \
-         --output-file user-service.go
-
-  # Transform with context
-  presto --prompt "Refactor to match style" \
-         --context style-guide.md \
-         --recursive --pattern "\.go$"
-
-  # Create and use custom commands  
-  presto --prompt "Add logging" --save-command add-logs
-  presto --cmd add-logs
-
-Environment:
-  OPENROUTER_API_KEY     Your OpenRouter API key (required)
-`)
-}
-
-func showModels() {
-	fmt.Println("🤖 Popular AI Models (via OpenRouter):")
-	fmt.Println()
-
-	models := []struct {
-		name        string
-		description string
-	}{
-		{"anthropic/claude-3.5-sonnet", "Best for complex code analysis and generation"},
-		{"anthropic/claude-3-haiku", "Fast and efficient for simple tasks"},
-		{"openai/gpt-4", "Excellent overall performance"},
-		{"openai/gpt-4-turbo", "Latest GPT-4 with extended context"},
-		{"openai/gpt-3.5-turbo", "Good balance of speed and capability"},
-		{"google/gemini-pro", "Google's flagship model"},
-		{"mistralai/mixtral-8x7b-instruct", "Open source, great performance"},
-		{"meta-llama/llama-3-70b-instruct", "Meta's latest large model"},
-		{"cohere/command-r-plus", "Optimized for reasoning tasks"},
-	}
-
-	for _, model := range models {
-		fmt.Printf("  %-35s %s\n", model.name, model.description)
-	}
-
-	fmt.Println()
-	fmt.Println("Visit https://openrouter.ai/docs for the complete list")
-	fmt.Println("Set with: --model MODEL_NAME")
+Run 'presto --help-full' for complete options list.
+`, version)
 }
