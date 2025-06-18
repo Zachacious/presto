@@ -592,43 +592,204 @@ func (c *Client) BuildContinuationPrompt(partialContent, originalContent string,
 	return prompt.String()
 }
 
-// NEW: Merge continuation response with existing content
+// Enhanced mergeContinuation with robust overlap detection and removal
 func (c *Client) MergeContinuation(existing, continuation string) string {
-	// Remove any leading/trailing whitespace from continuation
 	continuation = strings.TrimSpace(continuation)
-
 	if continuation == "" {
 		return existing
 	}
 
-	// Split into lines for analysis
+	// First try exact line overlap detection (existing logic)
+	if merged := c.tryExactLineOverlap(existing, continuation); merged != "" {
+		return merged
+	}
+
+	// Then try partial completion detection (new logic for your case)
+	if merged := c.tryPartialCompletion(existing, continuation); merged != "" {
+		return merged
+	}
+
+	// Finally try word-level overlap detection
+	if merged := c.tryWordOverlap(existing, continuation); merged != "" {
+		return merged
+	}
+
+	// No overlap detected, concatenate with newline
+	return existing + "\n" + continuation
+}
+
+// tryExactLineOverlap - existing logic for exact line matches
+func (c *Client) tryExactLineOverlap(existing, continuation string) string {
 	existingLines := strings.Split(existing, "\n")
 	continuationLines := strings.Split(continuation, "\n")
 
-	// Look for overlap in the last few lines of existing and first few lines of continuation
 	maxOverlapCheck := min(len(existingLines), len(continuationLines), 5)
 
 	for overlap := 1; overlap <= maxOverlapCheck; overlap++ {
-		// Check if last `overlap` lines of existing match first `overlap` lines of continuation
 		existingTail := existingLines[len(existingLines)-overlap:]
 		continuationHead := continuationLines[:overlap]
 
 		if c.linesMatch(existingTail, continuationHead) {
-			// Found overlap, merge by skipping the overlapping part in continuation
 			remaining := continuationLines[overlap:]
 			if len(remaining) > 0 {
 				return existing + "\n" + strings.Join(remaining, "\n")
 			}
-			// If continuation is entirely overlap, just return existing
 			return existing
 		}
 	}
 
-	// No overlap detected, concatenate with a newline
-	return existing + "\n" + continuation
+	return "" // No exact overlap found
 }
 
-// NEW: Check if two line slices match (allowing for minor whitespace differences)
+// tryPartialCompletion - NEW: detect when continuation completes truncated content
+func (c *Client) tryPartialCompletion(existing, continuation string) string {
+	existingLines := strings.Split(existing, "\n")
+	continuationLines := strings.Split(continuation, "\n")
+
+	if len(existingLines) == 0 || len(continuationLines) == 0 {
+		return ""
+	}
+
+	// Check last 1-3 lines of existing against first 1-3 lines of continuation
+	maxLinesToCheck := min(len(existingLines), len(continuationLines), 3)
+
+	for linesToRemove := 1; linesToRemove <= maxLinesToCheck; linesToRemove++ {
+		// Lines to potentially remove from end of existing
+		existingTail := existingLines[len(existingLines)-linesToRemove:]
+
+		// Lines to check in continuation
+		continuationHead := continuationLines[:min(linesToRemove+2, len(continuationLines), 20)]
+
+		// Check if any line in continuation head "completes" the tail
+		if completionPoint := c.findCompletionPoint(existingTail, continuationHead); completionPoint >= 0 {
+			// Remove incomplete lines from existing
+			truncatedExisting := strings.Join(existingLines[:len(existingLines)-linesToRemove], "\n")
+
+			// Take continuation from the completion point
+			remainingContinuation := strings.Join(continuationLines[completionPoint:], "\n")
+
+			if truncatedExisting == "" {
+				return remainingContinuation
+			}
+			return truncatedExisting + "\n" + remainingContinuation
+		}
+	}
+
+	return "" // No partial completion found
+}
+
+// findCompletionPoint - check if continuation lines complete/correct existing lines
+func (c *Client) findCompletionPoint(existingTail, continuationHead []string) int {
+	for contIdx, contLine := range continuationHead {
+		contLine = strings.TrimSpace(contLine)
+		if contLine == "" {
+			continue
+		}
+
+		// Check if this continuation line completes any existing tail line
+		for _, existingLine := range existingTail {
+			existingLine = strings.TrimSpace(existingLine)
+			if existingLine == "" {
+				continue
+			}
+
+			// Case 1: Continuation line starts with existing line content (completion)
+			// existing: "He walked dow"  continuation: "He walked down the street"
+			if len(contLine) > len(existingLine) && strings.HasPrefix(contLine, existingLine) {
+				return contIdx
+			}
+
+			// Case 2: Existing line is prefix of continuation (truncation completion)
+			// existing: "console.log('Hello"  continuation: "console.log('Hello World')"
+			if len(existingLine) > 3 && strings.HasPrefix(contLine, existingLine[:len(existingLine)-1]) {
+				return contIdx
+			}
+
+			// Case 3: Word-level completion
+			existingWords := strings.Fields(existingLine)
+			contWords := strings.Fields(contLine)
+
+			if len(existingWords) > 0 && len(contWords) > 0 {
+				lastExistingWord := existingWords[len(existingWords)-1]
+				firstContWord := contWords[0]
+
+				// Check if last word in existing is partial of first word in continuation
+				if len(lastExistingWord) >= 3 && len(firstContWord) > len(lastExistingWord) &&
+					strings.HasPrefix(firstContWord, lastExistingWord) {
+					return contIdx
+				}
+			}
+		}
+	}
+
+	return -1 // No completion found
+}
+
+// tryWordOverlap - detect word-level overlaps for more complex cases
+func (c *Client) tryWordOverlap(existing, continuation string) string {
+	// Get last few sentences of existing
+	existingWords := strings.Fields(existing)
+	continuationWords := strings.Fields(continuation)
+
+	if len(existingWords) < 3 || len(continuationWords) < 3 {
+		return ""
+	}
+
+	// Check last 10-20 words of existing against first 10-20 words of continuation
+	maxWordsToCheck := min(len(existingWords), len(continuationWords), 20)
+
+	for wordsToCheck := 3; wordsToCheck <= maxWordsToCheck; wordsToCheck++ {
+		existingTail := existingWords[len(existingWords)-wordsToCheck:]
+		continuationHead := continuationWords[:min(wordsToCheck+5, len(continuationWords), 20)]
+
+		// Look for the longest matching sequence
+		if overlapLen := c.findWordOverlap(existingTail, continuationHead); overlapLen > 0 {
+			// Remove overlapping words from existing
+			truncatedWords := existingWords[:len(existingWords)-overlapLen]
+
+			// Reconstruct the text
+			truncatedExisting := strings.Join(truncatedWords, " ")
+
+			if truncatedExisting == "" {
+				return continuation
+			}
+			return truncatedExisting + " " + continuation
+		}
+	}
+
+	return "" // No word overlap found
+}
+
+// findWordOverlap - find longest word sequence overlap
+func (c *Client) findWordOverlap(existingTail, continuationHead []string) int {
+	maxOverlap := 0
+
+	// Try different starting positions in continuation
+	for startPos := 0; startPos < len(continuationHead)-2; startPos++ {
+		overlap := 0
+
+		// Count matching words
+		for i := 0; i < len(existingTail) && (startPos+i) < len(continuationHead); i++ {
+			existing := strings.ToLower(strings.TrimSpace(existingTail[i]))
+			continuation := strings.ToLower(strings.TrimSpace(continuationHead[startPos+i]))
+
+			if existing == continuation {
+				overlap++
+			} else {
+				break
+			}
+		}
+
+		// Need at least 3 matching words to consider it an overlap
+		if overlap >= 3 && overlap > maxOverlap {
+			maxOverlap = overlap
+		}
+	}
+
+	return maxOverlap
+}
+
+// linesMatch - existing helper (unchanged)
 func (c *Client) linesMatch(lines1, lines2 []string) bool {
 	if len(lines1) != len(lines2) {
 		return false
@@ -642,6 +803,31 @@ func (c *Client) linesMatch(lines1, lines2 []string) bool {
 
 	return true
 }
+
+// func min(a, b, c int) int {
+// 	if a <= b && a <= c {
+// 		return a
+// 	}
+// 	if b <= c {
+// 		return b
+// 	}
+// 	return c
+// }
+
+// NEW: Check if two line slices match (allowing for minor whitespace differences)
+// func (c *Client) linesMatch(lines1, lines2 []string) bool {
+// 	if len(lines1) != len(lines2) {
+// 		return false
+// 	}
+
+// 	for i := range lines1 {
+// 		if strings.TrimSpace(lines1[i]) != strings.TrimSpace(lines2[i]) {
+// 			return false
+// 		}
+// 	}
+
+// 	return true
+// }
 
 // NEW: Check if response looks reasonably complete
 func (c *Client) LooksReasonablyComplete(response, original string, language types.Language) bool {

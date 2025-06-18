@@ -19,7 +19,10 @@ import (
 )
 
 // Default system prompt focused on complete file output
-const DEFAULT_SYSTEM_PROMPT = `CRITICAL INSTRUCTIONS:
+const DEFAULT_SYSTEM_PROMPT = `
+detailed thinking on
+
+CRITICAL INSTRUCTIONS:
 - You must return the COMPLETE file content with your changes applied
 - Return ONLY the file content - no explanations, no markdown blocks, no commentary
 - Do not truncate or summarize - include every line of the original file
