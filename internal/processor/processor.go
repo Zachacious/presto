@@ -169,11 +169,29 @@ func (p *Processor) processFile(file *types.FileInfo, opts *types.ProcessingOpti
 		contentStr = p.commentRemover.RemoveComments(contentStr, file.Language)
 	}
 
+	// Build prompt with mode-specific instructions
+	var finalPrompt string
+	if opts.Mode == types.ModeTransform {
+		finalPrompt = `CRITICAL INSTRUCTIONS FOR FILE TRANSFORMATION:
+- You must return the COMPLETE file content with your changes applied
+- Return ONLY the file content - no explanations, no markdown blocks, no commentary
+- Do not truncate or summarize - include every line of the original file
+- Apply the requested changes but preserve all other content exactly
+- Do not add explanatory comments about what you changed
+- The response will be written directly to a file, so it must be valid, complete file content
+
+IMPORTANT: Do exactly what is asked and nothing else. Do not add extra features, improvements, or changes beyond the specific request.
+
+` + opts.AIPrompt
+	} else {
+		finalPrompt = opts.AIPrompt
+	}
+
 	// Create AI request with file name context
 	aiReq := types.AIRequest{
-		Prompt:      opts.AIPrompt,
+		Prompt:      finalPrompt,
 		Content:     contentStr,
-		FileName:    file.Path, // NEW: Include the file name
+		FileName:    file.Path,
 		Language:    file.Language,
 		MaxTokens:   opts.MaxTokens,
 		Temperature: opts.Temperature,
@@ -226,9 +244,14 @@ func (p *Processor) processGenerate(opts *types.ProcessingOptions, contextFiles 
 		Mode:       types.ModeGenerate,
 	}
 
+	// Build prompt with constraint
+	finalPrompt := `IMPORTANT: Do exactly what is asked and nothing else. Do not add extra features, improvements, or changes beyond the specific request.
+
+` + opts.AIPrompt
+
 	// Create AI request for generation
 	aiReq := types.AIRequest{
-		Prompt:      opts.AIPrompt,
+		Prompt:      finalPrompt,
 		Content:     "", // No specific content for generation
 		Language:    types.LangText,
 		MaxTokens:   opts.MaxTokens,
@@ -257,39 +280,6 @@ func (p *Processor) processGenerate(opts *types.ProcessingOptions, contextFiles 
 	result.Duration = time.Since(startTime)
 	return []*types.ProcessingResult{result}, nil
 }
-
-// handleOutput writes processed content to the appropriate destination
-// func (p *Processor) handleOutput(inputFile, content string, opts *types.ProcessingOptions) (string, error) {
-// 	switch opts.OutputMode {
-// 	case types.OutputModeStdout:
-// 		fmt.Print(content)
-// 		return "stdout", nil
-
-// 	case types.OutputModeInPlace:
-// 		// Create backup if requested
-// 		if opts.BackupOriginal {
-// 			backupFile := inputFile + ".backup"
-// 			if err := p.copyFile(inputFile, backupFile); err != nil {
-// 				return "", fmt.Errorf("failed to create backup: %w", err)
-// 			}
-// 		}
-
-// 		if err := os.WriteFile(inputFile, []byte(content), 0644); err != nil {
-// 			return "", err
-// 		}
-// 		return inputFile, nil
-
-// 	case types.OutputModeSeparate:
-// 		outputFile := inputFile + opts.OutputSuffix
-// 		if err := os.WriteFile(outputFile, []byte(content), 0644); err != nil {
-// 			return "", err
-// 		}
-// 		return outputFile, nil
-
-// 	default:
-// 		return "", fmt.Errorf("unsupported output mode: %s", opts.OutputMode)
-// 	}
-// }
 
 // Helper methods (findFiles, loadContextFiles, etc.) remain mostly the same
 // but I'll include the key ones:
