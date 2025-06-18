@@ -47,39 +47,76 @@ func (c *Client) ValidateConfig() error {
 
 // ProcessContent sends content to AI for processing
 func (c *Client) ProcessContent(req types.AIRequest, contextFiles []*types.ContextFile) (*types.AIResponse, error) {
-	// Build the complete prompt
-	fullPrompt := c.buildPrompt(req, contextFiles)
+	const MAX_CONTINUATIONS = 5
 
-	// Create API request based on provider
-	var apiResp APIResponse
-	var err error
+	var fullContent strings.Builder
+	var totalTokens int
+	var lastFinishReason string
+	currentPrompt := c.buildPrompt(req, contextFiles)
 
-	switch c.config.Provider {
-	case types.ProviderOpenAI, types.ProviderLocal, types.ProviderCustom:
-		apiResp, err = c.sendOpenAIRequest(fullPrompt, req)
-	case types.ProviderAnthropic:
-		apiResp, err = c.sendAnthropicRequest(fullPrompt, req)
-	default:
-		// Default to OpenAI-compatible API
-		apiResp, err = c.sendOpenAIRequest(fullPrompt, req)
-	}
+	for attempt := 0; attempt < MAX_CONTINUATIONS; attempt++ {
+		// Create API request based on provider
+		var apiResp APIResponse
+		var err error
 
-	if err != nil {
-		return nil, err
-	}
+		switch c.config.Provider {
+		case types.ProviderOpenAI, types.ProviderLocal, types.ProviderCustom:
+			apiResp, err = c.sendOpenAIRequest(currentPrompt, req)
+		case types.ProviderAnthropic:
+			apiResp, err = c.sendAnthropicRequest(currentPrompt, req)
+		default:
+			apiResp, err = c.sendOpenAIRequest(currentPrompt, req)
+		}
 
-	content := apiResp.GetContent()
+		if err != nil {
+			return nil, err
+		}
 
-	// Post-process the content to remove unwanted markdown formatting
-	if req.Mode == types.ModeTransform {
-		content = c.postProcessContent(content, req.Language)
+		content := apiResp.GetContent()
+		totalTokens += apiResp.GetTokensUsed()
+		lastFinishReason = apiResp.GetFinishReason()
+
+		// Post-process the content to remove unwanted markdown formatting
+		if req.Mode == types.ModeTransform {
+			content = c.postProcessContent(content, req.Language)
+		}
+
+		// First response - add everything
+		if attempt == 0 {
+			fullContent.WriteString(content)
+		} else {
+			// Continuation - try to merge intelligently
+			merged := c.MergeContinuation(fullContent.String(), content)
+			fullContent.Reset()
+			fullContent.WriteString(merged)
+		}
+
+		// Check if response is complete
+		if apiResp.IsComplete() {
+			break
+		}
+
+		// For generate mode, don't continue (it's not a file completion)
+		if req.Mode == types.ModeGenerate {
+			break
+		}
+
+		// Check if we have reasonable completeness
+		if attempt > 0 && c.LooksReasonablyComplete(fullContent.String(), req.Content, req.Language) {
+			break
+		}
+
+		// Prepare continuation prompt
+		currentPrompt = c.BuildContinuationPrompt(fullContent.String(), req.Content, req)
 	}
 
 	// Convert to standard response
 	return &types.AIResponse{
-		Content:    content,
-		TokensUsed: apiResp.GetTokensUsed(),
-		Model:      c.config.Model,
+		Content:      fullContent.String(),
+		TokensUsed:   totalTokens,
+		Model:        c.config.Model,
+		FinishReason: lastFinishReason,
+		Truncated:    !c.wasResponseComplete(lastFinishReason),
 	}, nil
 }
 
@@ -518,6 +555,235 @@ func (c *Client) sendAnthropicRequest(prompt string, req types.AIRequest) (APIRe
 	return &apiResp, nil
 }
 
+// NEW: Build continuation prompt
+func (c *Client) BuildContinuationPrompt(partialContent, originalContent string, req types.AIRequest) string {
+	var prompt bytes.Buffer
+
+	prompt.WriteString("CONTINUATION REQUEST:\n")
+	prompt.WriteString("The previous response was incomplete due to length limits. Please continue from where you left off.\n\n")
+
+	prompt.WriteString("IMPORTANT INSTRUCTIONS:\n")
+	prompt.WriteString("- Continue the file content exactly from where it was cut off\n")
+	prompt.WriteString("- Return ONLY the remaining content - no explanations or repetition\n")
+	prompt.WriteString("- Do not repeat any content that was already provided\n")
+	prompt.WriteString("- Maintain the same formatting and style\n")
+	prompt.WriteString("- Complete the entire file\n\n")
+
+	// Show original file size for context
+	if originalContent != "" {
+		prompt.WriteString(fmt.Sprintf("ORIGINAL FILE SIZE: %d characters\n", len(originalContent)))
+		prompt.WriteString(fmt.Sprintf("PARTIAL CONTENT SIZE: %d characters\n", len(partialContent)))
+		prompt.WriteString(fmt.Sprintf("ESTIMATED REMAINING: %d characters\n\n", len(originalContent)-len(partialContent)))
+	}
+
+	// Show the last few lines of what we have so far for context
+	lines := strings.Split(partialContent, "\n")
+	contextLines := 10
+	if len(lines) > contextLines {
+		prompt.WriteString("LAST FEW LINES OF PARTIAL CONTENT (for context):\n")
+		prompt.WriteString("...\n")
+		prompt.WriteString(strings.Join(lines[len(lines)-contextLines:], "\n"))
+		prompt.WriteString("\n\n")
+	}
+
+	prompt.WriteString("Please continue with the remaining content to complete the file.\n")
+	prompt.WriteString(c.getOutputInstructions(req.Language))
+
+	return prompt.String()
+}
+
+// NEW: Merge continuation response with existing content
+func (c *Client) MergeContinuation(existing, continuation string) string {
+	// Remove any leading/trailing whitespace from continuation
+	continuation = strings.TrimSpace(continuation)
+
+	if continuation == "" {
+		return existing
+	}
+
+	// Split into lines for analysis
+	existingLines := strings.Split(existing, "\n")
+	continuationLines := strings.Split(continuation, "\n")
+
+	// Look for overlap in the last few lines of existing and first few lines of continuation
+	maxOverlapCheck := min(len(existingLines), len(continuationLines), 5)
+
+	for overlap := 1; overlap <= maxOverlapCheck; overlap++ {
+		// Check if last `overlap` lines of existing match first `overlap` lines of continuation
+		existingTail := existingLines[len(existingLines)-overlap:]
+		continuationHead := continuationLines[:overlap]
+
+		if c.linesMatch(existingTail, continuationHead) {
+			// Found overlap, merge by skipping the overlapping part in continuation
+			remaining := continuationLines[overlap:]
+			if len(remaining) > 0 {
+				return existing + "\n" + strings.Join(remaining, "\n")
+			}
+			// If continuation is entirely overlap, just return existing
+			return existing
+		}
+	}
+
+	// No overlap detected, concatenate with a newline
+	return existing + "\n" + continuation
+}
+
+// NEW: Check if two line slices match (allowing for minor whitespace differences)
+func (c *Client) linesMatch(lines1, lines2 []string) bool {
+	if len(lines1) != len(lines2) {
+		return false
+	}
+
+	for i := range lines1 {
+		if strings.TrimSpace(lines1[i]) != strings.TrimSpace(lines2[i]) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// NEW: Check if response looks reasonably complete
+func (c *Client) LooksReasonablyComplete(response, original string, language types.Language) bool {
+	// If response is longer than original, probably complete
+	if len(response) >= len(original) {
+		return true
+	}
+
+	// If response is at least 90% of original and structurally valid, probably complete
+	if len(response) >= len(original)*9/10 {
+		if c.hasBalancedStructure(response, language) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// NEW: Check if response has balanced structure (basic validation)
+func (c *Client) hasBalancedStructure(content string, language types.Language) bool {
+	switch language {
+	case types.LangJavaScript, types.LangTypeScript, types.LangJSON, types.LangGo, types.LangJava, types.LangC, types.LangCPP:
+		return c.hasBalancedBraces(content)
+	case types.LangHTML, types.LangXML:
+		return c.hasBalancedTags(content)
+	case types.LangPython:
+		return c.hasValidPythonStructure(content)
+	default:
+		// For other languages, do basic checks
+		return !c.hasAbruptEnding(content)
+	}
+}
+
+// NEW: Check brace balance
+func (c *Client) hasBalancedBraces(content string) bool {
+	braceCount := 0
+	parenCount := 0
+	bracketCount := 0
+
+	inString := false
+	var stringChar rune
+
+	for i, r := range content {
+		// Handle string literals (basic)
+		if !inString && (r == '"' || r == '\'' || r == '`') {
+			inString = true
+			stringChar = r
+			continue
+		} else if inString && r == stringChar {
+			// Check if it's escaped
+			if i > 0 && content[i-1] != '\\' {
+				inString = false
+			}
+			continue
+		}
+
+		if inString {
+			continue
+		}
+
+		switch r {
+		case '{':
+			braceCount++
+		case '}':
+			braceCount--
+		case '(':
+			parenCount++
+		case ')':
+			parenCount--
+		case '[':
+			bracketCount++
+		case ']':
+			bracketCount--
+		}
+	}
+
+	return braceCount == 0 && parenCount == 0 && bracketCount == 0
+}
+
+// NEW: Basic tag balance check for HTML/XML
+func (c *Client) hasBalancedTags(content string) bool {
+	// This is a simplified check - a full parser would be better
+	openTags := strings.Count(content, "<")
+	closeTags := strings.Count(content, ">")
+	return openTags == closeTags
+}
+
+// NEW: Basic Python structure validation
+func (c *Client) hasValidPythonStructure(content string) bool {
+	// Check for common Python patterns and that it doesn't end abruptly
+	lines := strings.Split(content, "\n")
+	if len(lines) == 0 {
+		return false
+	}
+
+	lastLine := strings.TrimSpace(lines[len(lines)-1])
+
+	// Python shouldn't end with these characters typically
+	abruptEndings := []string{":", "\\", ",", "(", "[", "{"}
+	for _, ending := range abruptEndings {
+		if strings.HasSuffix(lastLine, ending) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// NEW: Check for abrupt endings
+func (c *Client) hasAbruptEnding(content string) bool {
+	content = strings.TrimSpace(content)
+	if len(content) == 0 {
+		return true
+	}
+
+	lastChar := content[len(content)-1]
+	abruptChars := ",(+*/-=&|<"
+
+	return strings.ContainsRune(abruptChars, rune(lastChar))
+}
+
+// NEW: Check if response was complete based on finish reason
+func (c *Client) wasResponseComplete(finishReason string) bool {
+	incompleteReasons := []string{"length", "max_tokens", "max_output_tokens"}
+	for _, reason := range incompleteReasons {
+		if finishReason == reason {
+			return false
+		}
+	}
+	return true
+}
+
+func min(a, b, c int) int {
+	if a <= b && a <= c {
+		return a
+	}
+	if b <= c {
+		return b
+	}
+	return c
+}
+
 // Helper methods
 func (c *Client) getMaxTokens(requestTokens int) int {
 	if requestTokens > 0 {
@@ -539,6 +805,8 @@ func (c *Client) getTemperature(requestTemp float64) float64 {
 type APIResponse interface {
 	GetContent() string
 	GetTokensUsed() int
+	GetFinishReason() string // ADD THIS
+	IsComplete() bool        // ADD THIS
 }
 
 // OpenAI API types
@@ -560,7 +828,8 @@ type OpenAIResponse struct {
 }
 
 type OpenAIChoice struct {
-	Message OpenAIMessage `json:"message"`
+	Message      OpenAIMessage `json:"message"`
+	FinishReason string        `json:"finish_reason"` // ADD THIS
 }
 
 type OpenAIUsage struct {
@@ -592,8 +861,9 @@ type AnthropicMessage struct {
 }
 
 type AnthropicResponse struct {
-	Content []AnthropicContent `json:"content"`
-	Usage   AnthropicUsage     `json:"usage"`
+	Content    []AnthropicContent `json:"content"`
+	Usage      AnthropicUsage     `json:"usage"`
+	StopReason string             `json:"stop_reason"` // ADD THIS
 }
 
 type AnthropicContent struct {
@@ -615,4 +885,25 @@ func (r *AnthropicResponse) GetContent() string {
 
 func (r *AnthropicResponse) GetTokensUsed() int {
 	return r.Usage.InputTokens + r.Usage.OutputTokens
+}
+
+func (r *OpenAIResponse) GetFinishReason() string {
+	if len(r.Choices) > 0 {
+		return r.Choices[0].FinishReason
+	}
+	return ""
+}
+
+func (r *OpenAIResponse) IsComplete() bool {
+	reason := r.GetFinishReason()
+	return reason == "stop" || reason == "end_turn" || reason == ""
+}
+
+func (r *AnthropicResponse) GetFinishReason() string {
+	return r.StopReason
+}
+
+func (r *AnthropicResponse) IsComplete() bool {
+	reason := r.GetFinishReason()
+	return reason == "end_turn" || reason == "stop_sequence" || reason == ""
 }

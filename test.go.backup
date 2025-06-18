@@ -1,4 +1,4 @@
-package config
+package commands
 
 import (
 	"fmt"
@@ -10,329 +10,371 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Config represents the application configuration
-type Config struct {
-	AI       types.APIConfig `yaml:"ai"`
-	Defaults DefaultsConfig  `yaml:"defaults"`
-	Filters  FiltersConfig   `yaml:"filters"`
+// Manager handles command operations
+type Manager struct {
+	commands    map[string]*types.Command
+	commandsDir string
 }
 
-// DefaultsConfig contains default processing options
-type DefaultsConfig struct {
-	MaxConcurrent  int    `yaml:"max_concurrent"`
-	OutputMode     string `yaml:"output_mode"`
-	OutputSuffix   string `yaml:"output_suffix"`
-	BackupOriginal bool   `yaml:"backup_original"`
-	RemoveComments bool   `yaml:"remove_comments"`
-	FilePattern    string `yaml:"file_pattern"`
-}
-
-// FiltersConfig contains file filtering options
-type FiltersConfig struct {
-	MaxFileSize  int64    `yaml:"max_file_size"`
-	ExcludeDirs  []string `yaml:"exclude_dirs"`
-	ExcludeExts  []string `yaml:"exclude_exts"`
-	IncludeExts  []string `yaml:"include_exts"`
-	ExcludeFiles []string `yaml:"exclude_files"`
-}
-
-// DefaultConfig returns default configuration
-func DefaultConfig() *Config {
-	return &Config{
-		AI: types.GetDefaultAPIConfig(types.ProviderOpenAI),
-		Defaults: DefaultsConfig{
-			MaxConcurrent:  3,
-			OutputMode:     "separate",
-			OutputSuffix:   ".presto",
-			BackupOriginal: true,
-			RemoveComments: false,
-			FilePattern:    "",
-		},
-		Filters: FiltersConfig{
-			MaxFileSize: 1024 * 1024, // 1MB
-			ExcludeDirs: []string{
-				".git", ".svn", ".hg",
-				"node_modules", "vendor", "venv", ".venv",
-				".idea", ".vscode", ".vs",
-				"dist", "build", "target", "bin", "obj",
-				".next", ".nuxt", "__pycache__",
-				"coverage", ".coverage", ".nyc_output",
-			},
-			ExcludeExts: []string{
-				".exe", ".dll", ".so", ".dylib",
-				".bin", ".o", ".obj", ".a", ".lib",
-				".zip", ".tar", ".gz", ".rar",
-				".jpg", ".jpeg", ".png", ".gif", ".bmp",
-				".mp3", ".mp4", ".avi", ".mov", ".wmv",
-				".pdf", ".doc", ".docx", ".xls", ".xlsx",
-			},
-			IncludeExts:  []string{},
-			ExcludeFiles: []string{"*.min.*", "*.bundle.*", "*-lock.*"},
-		},
-	}
-}
-
-// LoadConfig loads configuration from file with environment variable fallbacks
-func LoadConfig(configPath string) (*Config, error) {
-	cfg := DefaultConfig()
-
-	// Determine config file path
-	if configPath == "" {
-		homeDir, err := os.UserHomeDir()
-		if err != nil {
-			return cfg, nil
-		}
-		configPath = filepath.Join(homeDir, ".presto", "config.yaml")
-	}
-
-	// Load from file if it exists
-	if data, err := os.ReadFile(configPath); err == nil {
-		if err := yaml.Unmarshal(data, cfg); err != nil {
-			return nil, fmt.Errorf("failed to parse config file: %w", err)
-		}
-	}
-
-	// Apply environment variable overrides
-	cfg.applyEnvOverrides()
-
-	return cfg, nil
-}
-
-// applyEnvOverrides applies environment variable overrides
-func (c *Config) applyEnvOverrides() {
-	// Try multiple environment variable names for compatibility
-	envVars := []string{
-		"OPENAI_API_KEY",     // OpenAI standard
-		"ANTHROPIC_API_KEY",  // Anthropic standard
-		"OPENROUTER_API_KEY", // OpenRouter (for backward compatibility)
-		"AI_API_KEY",         // Generic
-		"PRESTO_API_KEY",     // Presto-specific
-	}
-
-	for _, envVar := range envVars {
-		if key := os.Getenv(envVar); key != "" && c.AI.APIKey == "" {
-			c.AI.APIKey = key
-			break
-		}
-	}
-
-	// Override other settings from env if present
-	if baseURL := os.Getenv("PRESTO_BASE_URL"); baseURL != "" {
-		c.AI.BaseURL = baseURL
-	}
-	if model := os.Getenv("PRESTO_MODEL"); model != "" {
-		c.AI.Model = model
-	}
-}
-
-// SaveConfig saves configuration to file
-func SaveConfig(cfg *Config, configPath string) error {
-	if configPath == "" {
-		homeDir, err := os.UserHomeDir()
-		if err != nil {
-			return err
-		}
-		configPath = filepath.Join(homeDir, ".presto", "config.yaml")
-	}
-
-	// Ensure directory exists
-	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
-		return err
-	}
-
-	data, err := yaml.Marshal(cfg)
-	if err != nil {
-		return err
-	}
-
-	return os.WriteFile(configPath, data, 0644)
-}
-
-// SaveAPIKey saves API key to config file
-func SaveAPIKey(apiKey string) error {
-	cfg, err := LoadConfig("")
-	if err != nil {
-		cfg = DefaultConfig()
-	}
-
-	cfg.AI.APIKey = apiKey
-	return SaveConfig(cfg, "")
-}
-
-// PromptForAPIKey prompts user to enter API key interactively
-func PromptForAPIKey() (string, error) {
-	fmt.Print("🔑 API key not found.\n")
-	fmt.Print("Please enter your API key: ")
-
-	var apiKey string
-	if _, err := fmt.Scanln(&apiKey); err != nil {
-		return "", fmt.Errorf("failed to read API key: %w", err)
-	}
-
-	apiKey = strings.TrimSpace(apiKey)
-	if apiKey == "" {
-		return "", fmt.Errorf("API key cannot be empty")
-	}
-
-	return apiKey, nil
-}
-
-// ConfigureInteractive runs interactive configuration
-func ConfigureInteractive() error {
-	fmt.Println("🎩 Presto Configuration")
-	fmt.Println("=======================")
-	fmt.Println()
-
-	// Choose provider
-	provider, err := promptProvider()
-	if err != nil {
-		return err
-	}
-
-	// Get base config for provider
-	cfg := DefaultConfig()
-	cfg.AI = types.GetDefaultAPIConfig(provider)
-
-	// Configure API key
-	if err := configureAPIKey(cfg, provider); err != nil {
-		return err
-	}
-
-	// Configure model (optional)
-	if err := configureModel(cfg, provider); err != nil {
-		return err
-	}
-
-	// Save configuration
-	if err := SaveConfig(cfg, ""); err != nil {
-		return fmt.Errorf("failed to save configuration: %w", err)
-	}
-
-	fmt.Println()
-	fmt.Println("✅ Configuration saved to ~/.presto/config.yaml")
-	fmt.Println()
-	fmt.Println("You can now run commands like:")
-	fmt.Println("  presto --cmd add-docs --input .")
-	fmt.Println("  presto --prompt \"Add comments\" --input main.go")
-
-	return nil
-}
-
-func promptProvider() (types.AIProvider, error) {
-	fmt.Println("Select AI provider:")
-	fmt.Println("1. OpenAI (gpt-4, gpt-3.5-turbo)")
-	fmt.Println("2. Anthropic (claude-3-5-sonnet, claude-3-haiku)")
-	fmt.Println("3. Local (ollama, lm-studio, etc.)")
-	fmt.Println("4. Custom (other OpenAI-compatible API)")
-	fmt.Print("Choice [1]: ")
-
-	var choice string
-	fmt.Scanln(&choice)
-	choice = strings.TrimSpace(choice)
-
-	if choice == "" {
-		choice = "1"
-	}
-
-	switch choice {
-	case "1":
-		return types.ProviderOpenAI, nil
-	case "2":
-		return types.ProviderAnthropic, nil
-	case "3":
-		return types.ProviderLocal, nil
-	case "4":
-		return types.ProviderCustom, nil
-	default:
-		return types.ProviderOpenAI, nil
-	}
-}
-
-func configureAPIKey(cfg *Config, provider types.AIProvider) error {
-	switch provider {
-	case types.ProviderOpenAI:
-		fmt.Println()
-		fmt.Println("🔑 OpenAI API Key")
-		fmt.Println("Get your API key from: https://platform.openai.com/api-keys")
-		fmt.Print("Enter API key: ")
-	case types.ProviderAnthropic:
-		fmt.Println()
-		fmt.Println("🔑 Anthropic API Key")
-		fmt.Println("Get your API key from: https://console.anthropic.com/")
-		fmt.Print("Enter API key: ")
-	case types.ProviderLocal:
-		fmt.Println()
-		fmt.Println("🔑 Local API Configuration")
-		fmt.Println("For local models, you may not need an API key.")
-		fmt.Print("Enter API key (or press Enter to skip): ")
-	case types.ProviderCustom:
-		fmt.Println()
-		fmt.Println("🔑 Custom API Configuration")
-		fmt.Print("Enter base URL: ")
-		var baseURL string
-		fmt.Scanln(&baseURL)
-		if baseURL != "" {
-			cfg.AI.BaseURL = baseURL
-		}
-		fmt.Print("Enter API key: ")
-	}
-
-	var apiKey string
-	fmt.Scanln(&apiKey)
-	apiKey = strings.TrimSpace(apiKey)
-
-	if apiKey == "" && provider != types.ProviderLocal {
-		return fmt.Errorf("API key is required for %s", provider)
-	}
-
-	cfg.AI.APIKey = apiKey
-	return nil
-}
-
-func configureModel(cfg *Config, provider types.AIProvider) error {
-	fmt.Println()
-	fmt.Printf("Default model: %s\n", cfg.AI.Model)
-
-	switch provider {
-	case types.ProviderOpenAI:
-		fmt.Println("Available models: gpt-4, gpt-4-turbo, gpt-3.5-turbo")
-	case types.ProviderAnthropic:
-		fmt.Println("Available models: claude-3-5-sonnet-20241022, claude-3-haiku-20240307")
-	case types.ProviderLocal:
-		fmt.Println("Use the model name from your local setup")
-	}
-
-	fmt.Print("Enter model name (or press Enter for default): ")
-	var model string
-	fmt.Scanln(&model)
-	model = strings.TrimSpace(model)
-
-	if model != "" {
-		cfg.AI.Model = model
-	}
-
-	return nil
-}
-
-// ValidateConfig checks if configuration is valid
-func ValidateConfig(cfg *Config) error {
-	if cfg.AI.APIKey == "" && cfg.AI.Provider != types.ProviderLocal {
-		return fmt.Errorf("API key is required")
-	}
-	if cfg.AI.BaseURL == "" {
-		return fmt.Errorf("base URL is required")
-	}
-	if cfg.AI.Model == "" {
-		return fmt.Errorf("model is required")
-	}
-	return nil
-}
-
-// GetConfigPath returns the default config file path
-func GetConfigPath() string {
+// New creates a new command manager
+func New() (*Manager, error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		return ""
+		return nil, fmt.Errorf("failed to get home directory: %w", err)
 	}
-	return filepath.Join(homeDir, ".presto", "config.yaml")
+
+	commandsDir := filepath.Join(homeDir, ".presto", "commands")
+	if err := os.MkdirAll(commandsDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create commands directory: %w", err)
+	}
+
+	m := &Manager{
+		commands:    make(map[string]*types.Command),
+		commandsDir: commandsDir,
+	}
+
+	// Load built-in commands
+	if err := m.loadBuiltinCommands(); err != nil {
+		return nil, fmt.Errorf("failed to load built-in commands: %w", err)
+	}
+
+	// Load user commands
+	if err := m.loadUserCommands(); err != nil {
+		return nil, fmt.Errorf("failed to load user commands: %w", err)
+	}
+
+	return m, nil
+}
+
+// GetCommand retrieves a command by name
+func (m *Manager) GetCommand(name string) (*types.Command, error) {
+	cmd, exists := m.commands[name]
+	if !exists {
+		return nil, fmt.Errorf("command '%s' not found", name)
+	}
+	return m.copyCommand(cmd), nil
+}
+
+// GetBuiltinCommands returns all built-in commands
+func (m *Manager) GetBuiltinCommands() map[string]*types.Command {
+	builtins := make(map[string]*types.Command)
+	for name, cmd := range m.commands {
+		if m.IsBuiltin(name) {
+			builtins[name] = m.copyCommand(cmd)
+		}
+	}
+	return builtins
+}
+
+// GetUserCommands returns all user commands
+func (m *Manager) GetUserCommands() map[string]*types.Command {
+	userCmds := make(map[string]*types.Command)
+	for name, cmd := range m.commands {
+		if !m.IsBuiltin(name) {
+			userCmds[name] = m.copyCommand(cmd)
+		}
+	}
+	return userCmds
+}
+
+// IsBuiltin checks if a command is built-in
+func (m *Manager) IsBuiltin(name string) bool {
+	builtinNames := []string{"add-docs", "add-logging", "optimize", "modernize", "cleanup", "explain", "summarize", "convert"}
+	for _, builtin := range builtinNames {
+		if name == builtin {
+			return true
+		}
+	}
+	return false
+}
+
+// SaveCommand saves a user command
+func (m *Manager) SaveCommand(cmd *types.Command) error {
+	if m.IsBuiltin(cmd.Name) {
+		return fmt.Errorf("cannot override built-in command: %s", cmd.Name)
+	}
+
+	// Save to file
+	filePath := filepath.Join(m.commandsDir, cmd.Name+".yaml")
+	data, err := yaml.Marshal(cmd)
+	if err != nil {
+		return fmt.Errorf("failed to marshal command: %w", err)
+	}
+
+	if err := os.WriteFile(filePath, data, 0644); err != nil {
+		return fmt.Errorf("failed to write command file: %w", err)
+	}
+
+	// Add to memory
+	m.commands[cmd.Name] = cmd
+	return nil
+}
+
+// DeleteCommand deletes a user command
+func (m *Manager) DeleteCommand(name string) error {
+	if m.IsBuiltin(name) {
+		return fmt.Errorf("cannot delete built-in command: %s", name)
+	}
+
+	filePath := filepath.Join(m.commandsDir, name+".yaml")
+	if err := os.Remove(filePath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to delete command file: %w", err)
+	}
+
+	delete(m.commands, name)
+	return nil
+}
+
+// ApplyCommand applies a command to processing options
+func (m *Manager) ApplyCommand(name string, opts *types.ProcessingOptions) error {
+	cmd, err := m.GetCommand(name)
+	if err != nil {
+		return err
+	}
+
+	// Apply command settings to options
+	if cmd.Mode != "" {
+		opts.Mode = cmd.Mode
+	}
+	if cmd.Prompt != "" {
+		opts.AIPrompt = cmd.Prompt
+	}
+	if cmd.PromptFile != "" {
+		opts.PromptFile = cmd.PromptFile
+	}
+
+	// Apply command options
+	if cmd.Options.OutputMode != "" {
+		opts.OutputMode = types.OutputMode(cmd.Options.OutputMode)
+	}
+	if cmd.Options.OutputSuffix != "" {
+		opts.OutputSuffix = cmd.Options.OutputSuffix
+	}
+	if cmd.Options.FilePattern != "" {
+		opts.FilePattern = cmd.Options.FilePattern
+	}
+	if cmd.Options.ExcludePattern != "" {
+		opts.ExcludePattern = cmd.Options.ExcludePattern
+	}
+	if len(cmd.Options.ContextPatterns) > 0 {
+		opts.ContextPatterns = append(opts.ContextPatterns, cmd.Options.ContextPatterns...)
+	}
+	if len(cmd.Options.ContextFiles) > 0 {
+		opts.ContextFiles = append(opts.ContextFiles, cmd.Options.ContextFiles...)
+	}
+	if cmd.Options.Recursive {
+		opts.Recursive = cmd.Options.Recursive
+	}
+	if cmd.Options.RemoveComments {
+		opts.RemoveComments = cmd.Options.RemoveComments
+	}
+	if cmd.Options.BackupOriginal {
+		opts.BackupOriginal = cmd.Options.BackupOriginal
+	}
+	if cmd.Options.Model != "" {
+		opts.Model = cmd.Options.Model
+	}
+	if cmd.Options.Temperature != 0 {
+		opts.Temperature = cmd.Options.Temperature
+	}
+	if cmd.Options.MaxTokens != 0 {
+		opts.MaxTokens = cmd.Options.MaxTokens
+	}
+
+	return nil
+}
+
+// SubstituteVariables substitutes variables in a command
+func (m *Manager) SubstituteVariables(cmd *types.Command, variables map[string]string) {
+	// Merge command variables with provided variables
+	allVars := make(map[string]string)
+	for k, v := range cmd.Variables {
+		allVars[k] = v
+	}
+	for k, v := range variables {
+		allVars[k] = v
+	}
+
+	// Substitute in prompt
+	cmd.Prompt = m.substituteString(cmd.Prompt, allVars)
+	cmd.PromptFile = m.substituteString(cmd.PromptFile, allVars)
+}
+
+// GenerateCommandTemplate generates a command template
+func (m *Manager) GenerateCommandTemplate(name string) *types.Command {
+	return &types.Command{
+		Name:        name,
+		Description: fmt.Sprintf("Custom command: %s", name),
+		Mode:        types.ModeTransform,
+		Prompt:      "Your prompt here",
+		Options: types.CommandOptions{
+			OutputMode: "separate",
+			Recursive:  true,
+		},
+		Variables: make(map[string]string),
+	}
+}
+
+// copyCommand creates a deep copy of a command
+func (m *Manager) copyCommand(cmd *types.Command) *types.Command {
+	cmdCopy := *cmd
+
+	// Copy slices
+	cmdCopy.Options.ContextPatterns = make([]string, len(cmd.Options.ContextPatterns))
+	copy(cmdCopy.Options.ContextPatterns, cmd.Options.ContextPatterns)
+
+	cmdCopy.Options.ContextFiles = make([]string, len(cmd.Options.ContextFiles))
+	copy(cmdCopy.Options.ContextFiles, cmd.Options.ContextFiles)
+
+	// Copy variables map
+	cmdCopy.Variables = make(map[string]string)
+	for k, v := range cmd.Variables {
+		cmdCopy.Variables[k] = v
+	}
+
+	return &cmdCopy
+}
+
+// substituteString substitutes variables in a string
+func (m *Manager) substituteString(s string, variables map[string]string) string {
+	result := s
+	for key, value := range variables {
+		placeholder := "{{" + key + "}}"
+		result = strings.ReplaceAll(result, placeholder, value)
+	}
+	return result
+}
+
+// loadBuiltinCommands loads built-in commands
+func (m *Manager) loadBuiltinCommands() error {
+	builtins := []*types.Command{
+		{
+			Name:        "add-docs",
+			Description: "Add comprehensive documentation and comments",
+			Mode:        types.ModeTransform,
+			Prompt:      "Add comprehensive documentation and comments to this content. For functions and methods, add clear descriptions of what they do, their parameters, return values, and usage examples where helpful. Keep the existing functionality unchanged.",
+			Options: types.CommandOptions{
+				OutputMode:   "separate",
+				OutputSuffix: ".documented",
+				Recursive:    true,
+			},
+		},
+		{
+			Name:        "add-logging",
+			Description: "Add logging statements throughout the content",
+			Mode:        types.ModeTransform,
+			Prompt:      "Add appropriate logging statements throughout this content. Include logging for important operations, errors, and key decision points. Use appropriate log levels and ensure sensitive information is not logged.",
+			Options: types.CommandOptions{
+				OutputMode:   "separate",
+				OutputSuffix: ".with-logging",
+				Recursive:    true,
+			},
+		},
+		{
+			Name:        "optimize",
+			Description: "Optimize content for better performance and readability",
+			Mode:        types.ModeTransform,
+			Prompt:      "Optimize this content for better performance and readability. Improve efficiency where possible, remove redundancy, and enhance organization while maintaining the same functionality.",
+			Options: types.CommandOptions{
+				OutputMode:   "separate",
+				OutputSuffix: ".optimized",
+				Recursive:    true,
+			},
+		},
+		{
+			Name:        "modernize",
+			Description: "Update content to use current best practices",
+			Mode:        types.ModeTransform,
+			Prompt:      "Modernize this content to use current best practices and conventions. Update syntax, patterns, and approaches to follow contemporary standards while maintaining the same functionality.",
+			Options: types.CommandOptions{
+				OutputMode:   "separate",
+				OutputSuffix: ".modern",
+				Recursive:    true,
+			},
+		},
+		{
+			Name:        "cleanup",
+			Description: "Clean and format content following best practices",
+			Mode:        types.ModeTransform,
+			Prompt:      "Clean up this content by improving formatting, removing dead or redundant sections, standardizing style, and ensuring it follows best practices. Maintain all functionality.",
+			Options: types.CommandOptions{
+				OutputMode:   "separate",
+				OutputSuffix: ".clean",
+				Recursive:    true,
+			},
+		},
+		{
+			Name:        "explain",
+			Description: "Add explanations and clarifying comments",
+			Mode:        types.ModeTransform,
+			Prompt:      "Add clear explanations and clarifying comments throughout this content. Explain complex logic, add context for decisions, and make the content more understandable for others.",
+			Options: types.CommandOptions{
+				OutputMode:   "separate",
+				OutputSuffix: ".explained",
+				Recursive:    true,
+			},
+		},
+		{
+			Name:        "summarize",
+			Description: "Create a summary of the content",
+			Mode:        types.ModeGenerate,
+			Prompt:      "Create a comprehensive summary of the content in the context files. Include key points, main concepts, and important details in a well-organized format.",
+			Options: types.CommandOptions{
+				OutputMode: "file",
+			},
+		},
+		{
+			Name:        "convert",
+			Description: "Convert content to a different format or style",
+			Mode:        types.ModeTransform,
+			Prompt:      "Convert this content to {{TARGET_FORMAT}}. Maintain the same information and functionality while adapting to the new format or style requirements.",
+			Options: types.CommandOptions{
+				OutputMode:   "separate",
+				OutputSuffix: ".converted",
+			},
+			Variables: map[string]string{
+				"TARGET_FORMAT": "markdown",
+			},
+		},
+	}
+
+	for _, cmd := range builtins {
+		m.commands[cmd.Name] = cmd
+	}
+
+	return nil
+}
+
+// loadUserCommands loads user commands from files
+func (m *Manager) loadUserCommands() error {
+	entries, err := os.ReadDir(m.commandsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".yaml") {
+			continue
+		}
+
+		filePath := filepath.Join(m.commandsDir, entry.Name())
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			continue
+		}
+
+		var cmd types.Command
+		if err := yaml.Unmarshal(data, &cmd); err != nil {
+			continue
+		}
+
+		if cmd.Name != "" {
+			m.commands[cmd.Name] = &cmd
+		}
+	}
+
+	return nil
 }

@@ -127,9 +127,11 @@ type AIRequest struct {
 
 // AIResponse represents a response from the AI service
 type AIResponse struct {
-	Content    string
-	TokensUsed int
-	Model      string
+	Content      string `json:"content"`
+	TokensUsed   int    `json:"tokens_used"`
+	Model        string `json:"model"`
+	FinishReason string `json:"finish_reason"` // ADD THIS
+	Truncated    bool   `json:"truncated"`     // ADD THIS
 }
 
 // ProcessingResult represents the result of processing a file
@@ -243,4 +245,12 @@ func GetDefaultAPIConfig(provider AIProvider) APIConfig {
 			Timeout:     60,
 		}
 	}
+}
+
+func (r *AIResponse) IsComplete() bool {
+	return !r.Truncated && (r.FinishReason == "stop" || r.FinishReason == "end_turn" || r.FinishReason == "")
+}
+
+func (r *AIResponse) NeedsContinuation() bool {
+	return r.Truncated || r.FinishReason == "length" || r.FinishReason == "max_tokens"
 }

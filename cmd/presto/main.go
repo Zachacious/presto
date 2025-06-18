@@ -10,6 +10,7 @@ import (
 	"github.com/Zachacious/presto/internal/commands"
 	"github.com/Zachacious/presto/internal/config"
 	"github.com/Zachacious/presto/internal/processor"
+	"github.com/Zachacious/presto/internal/ui"
 	"github.com/Zachacious/presto/pkg/types"
 )
 
@@ -321,64 +322,70 @@ func main() {
 	showSummary(results, opts.Verbose)
 }
 
-// showSummary displays processing results
+// // showSummary displays processing results
+// func showSummary(results []*types.ProcessingResult, verbose bool) {
+// 	successful := 0
+// 	failed := 0
+// 	skipped := 0
+// 	generated := 0
+// 	transformed := 0
+// 	totalTokens := 0
+// 	var failedFiles []string
+
+// 	for _, result := range results {
+// 		if result.Skipped {
+// 			skipped++
+// 		} else if result.Success {
+// 			successful++
+// 			totalTokens += result.AITokensUsed
+// 			if result.Mode == types.ModeGenerate {
+// 				generated++
+// 			} else {
+// 				transformed++
+// 			}
+// 		} else {
+// 			failed++
+// 			if result.Error != nil {
+// 				failedFiles = append(failedFiles, fmt.Sprintf("%s: %v", result.InputFile, result.Error))
+// 			}
+// 		}
+// 	}
+
+// 	fmt.Printf("\n🎯 Summary:\n")
+// 	fmt.Printf("  ✅ Successful: %d", successful)
+// 	if generated > 0 && transformed > 0 {
+// 		fmt.Printf(" (%d generated, %d transformed)", generated, transformed)
+// 	} else if generated > 0 {
+// 		fmt.Printf(" (generated)")
+// 	} else if transformed > 0 {
+// 		fmt.Printf(" (transformed)")
+// 	}
+// 	fmt.Println()
+
+// 	if skipped > 0 {
+// 		fmt.Printf("  ⏭️  Skipped: %d\n", skipped)
+// 	}
+// 	if failed > 0 {
+// 		fmt.Printf("  ❌ Failed: %d\n", failed)
+// 	}
+// 	fmt.Printf("  🤖 AI Tokens Used: %d\n", totalTokens)
+
+// 	if failed > 0 && verbose {
+// 		fmt.Printf("\n❌ Failed files:\n")
+// 		for _, failure := range failedFiles {
+// 			fmt.Printf("  - %s\n", failure)
+// 		}
+// 	}
+
+// 	if successful > 0 {
+// 		fmt.Printf("\n✨ Processing complete!\n")
+// 	}
+// }
+
+// showSummary displays processing results using the new UI
 func showSummary(results []*types.ProcessingResult, verbose bool) {
-	successful := 0
-	failed := 0
-	skipped := 0
-	generated := 0
-	transformed := 0
-	totalTokens := 0
-	var failedFiles []string
-
-	for _, result := range results {
-		if result.Skipped {
-			skipped++
-		} else if result.Success {
-			successful++
-			totalTokens += result.AITokensUsed
-			if result.Mode == types.ModeGenerate {
-				generated++
-			} else {
-				transformed++
-			}
-		} else {
-			failed++
-			if result.Error != nil {
-				failedFiles = append(failedFiles, fmt.Sprintf("%s: %v", result.InputFile, result.Error))
-			}
-		}
-	}
-
-	fmt.Printf("\n🎯 Summary:\n")
-	fmt.Printf("  ✅ Successful: %d", successful)
-	if generated > 0 && transformed > 0 {
-		fmt.Printf(" (%d generated, %d transformed)", generated, transformed)
-	} else if generated > 0 {
-		fmt.Printf(" (generated)")
-	} else if transformed > 0 {
-		fmt.Printf(" (transformed)")
-	}
-	fmt.Println()
-
-	if skipped > 0 {
-		fmt.Printf("  ⏭️  Skipped: %d\n", skipped)
-	}
-	if failed > 0 {
-		fmt.Printf("  ❌ Failed: %d\n", failed)
-	}
-	fmt.Printf("  🤖 AI Tokens Used: %d\n", totalTokens)
-
-	if failed > 0 && verbose {
-		fmt.Printf("\n❌ Failed files:\n")
-		for _, failure := range failedFiles {
-			fmt.Printf("  - %s\n", failure)
-		}
-	}
-
-	if successful > 0 {
-		fmt.Printf("\n✨ Processing complete!\n")
-	}
+	ui := ui.New(verbose)
+	ui.Summary(results)
 }
 
 // handleSaveCommand saves current options as a command

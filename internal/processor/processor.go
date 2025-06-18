@@ -14,6 +14,7 @@ import (
 	"github.com/Zachacious/presto/internal/comments"
 	"github.com/Zachacious/presto/internal/config"
 	"github.com/Zachacious/presto/internal/language"
+	"github.com/Zachacious/presto/internal/ui"
 	"github.com/Zachacious/presto/pkg/types"
 )
 
@@ -33,6 +34,7 @@ type Processor struct {
 	aiClient       *ai.Client
 	commentRemover *comments.Remover
 	config         *config.Config
+	ui             *ui.UI
 }
 
 // New creates a new processor
@@ -57,6 +59,9 @@ func New(cfg *config.Config) (*Processor, error) {
 
 // ProcessPath processes files based on the given options
 func (p *Processor) ProcessPath(opts *types.ProcessingOptions) ([]*types.ProcessingResult, error) {
+	// Update UI verbose setting
+	p.ui = ui.New(opts.Verbose)
+
 	// Load prompt from file if specified
 	if opts.PromptFile != "" {
 		content, err := os.ReadFile(opts.PromptFile)
@@ -89,6 +94,9 @@ func (p *Processor) ProcessPath(opts *types.ProcessingOptions) ([]*types.Process
 		}
 	}
 
+	// Show processing start info
+	p.ui.ProcessingStart(len(files), opts.Mode, opts.Model)
+
 	// Process files
 	switch opts.Mode {
 	case types.ModeGenerate:
@@ -106,7 +114,7 @@ func (p *Processor) processTransform(opts *types.ProcessingOptions, files []*typ
 		return p.simulateTransform(opts, files), nil
 	}
 
-	// Create worker pool
+	// Create channels for jobs and results
 	jobs := make(chan *types.FileInfo, len(files))
 	results := make(chan *types.ProcessingResult, len(files))
 
@@ -123,22 +131,23 @@ func (p *Processor) processTransform(opts *types.ProcessingOptions, files []*typ
 	}
 	close(jobs)
 
-	// Wait for completion
+	// Wait for completion and collect results
 	go func() {
 		wg.Wait()
 		close(results)
 	}()
 
-	// Collect results
 	var allResults []*types.ProcessingResult
+	completed := 0
+	total := len(files)
+
 	for result := range results {
 		allResults = append(allResults, result)
+		completed++
+
+		// Update progress if verbose
 		if opts.Verbose {
-			if result.Success {
-				fmt.Printf("✅ %s -> %s\n", result.InputFile, result.OutputFile)
-			} else {
-				fmt.Printf("❌ %s: %v\n", result.InputFile, result.Error)
-			}
+			p.ui.Progress(fmt.Sprintf("Progress: %d/%d files completed", completed, total))
 		}
 	}
 
@@ -184,6 +193,9 @@ func (p *Processor) processFile(file *types.FileInfo, opts *types.ProcessingOpti
 		Duration:  0,
 	}
 
+	// Show processing status
+	p.ui.FileProcessing(filepath.Base(file.Path))
+
 	// Read file content
 	content, err := os.ReadFile(file.Path)
 	if err != nil {
@@ -216,6 +228,17 @@ func (p *Processor) processFile(file *types.FileInfo, opts *types.ProcessingOpti
 		// For generate: just user prompt (no file constraints needed)
 		finalPrompt = opts.AIPrompt
 	}
+
+	// Process with AI - WITH UI UPDATES
+	_, totalTokens, err := p.processWithContinuationAndUI(file, finalPrompt, contentStr, opts, contextFiles)
+	if err != nil {
+		result.Error = fmt.Errorf("AI processing failed: %w", err)
+		result.Duration = time.Since(startTime)
+		p.ui.FileError(file.Path, result.Error)
+		return result
+	}
+
+	result.AITokensUsed = totalTokens
 
 	// Create AI request
 	aiReq := types.AIRequest{
@@ -251,7 +274,80 @@ func (p *Processor) processFile(file *types.FileInfo, opts *types.ProcessingOpti
 	result.BytesChanged = len(aiResp.Content) - len(contentStr)
 	result.Duration = time.Since(startTime)
 
+	// Show success
+	p.ui.FileSuccess(file.Path, outputFile, result.Duration, result.AITokensUsed)
+
 	return result
+}
+
+// NEW: Process with continuation and UI updates
+func (p *Processor) processWithContinuationAndUI(file *types.FileInfo, prompt, originalContent string, opts *types.ProcessingOptions, contextFiles []*types.ContextFile) (string, int, error) {
+	const MAX_CONTINUATIONS = 5
+
+	var fullContent strings.Builder
+	var totalTokens int
+	currentPrompt := prompt
+
+	for attempt := 0; attempt < MAX_CONTINUATIONS; attempt++ {
+		// Update UI for continuation attempts
+		if attempt > 0 {
+			p.ui.FileContinuation(filepath.Base(file.Path), attempt, MAX_CONTINUATIONS)
+		}
+
+		// Create AI request
+		aiReq := types.AIRequest{
+			Prompt:      currentPrompt,
+			Content:     originalContent,
+			FileName:    file.Path,
+			Language:    file.Language,
+			MaxTokens:   opts.MaxTokens,
+			Temperature: opts.Temperature,
+			Mode:        opts.Mode,
+		}
+
+		// Process with AI
+		aiResp, err := p.aiClient.ProcessContent(aiReq, contextFiles)
+		if err != nil {
+			return "", totalTokens, err
+		}
+
+		totalTokens += aiResp.TokensUsed
+
+		// First response - add everything
+		if attempt == 0 {
+			fullContent.WriteString(aiResp.Content)
+		} else {
+			// Continuation - try to merge intelligently
+			merged := p.aiClient.MergeContinuation(fullContent.String(), aiResp.Content)
+			fullContent.Reset()
+			fullContent.WriteString(merged)
+		}
+
+		// Check if response is complete
+		if aiResp.IsComplete() {
+			break
+		}
+
+		// For generate mode, don't continue
+		if opts.Mode == types.ModeGenerate {
+			break
+		}
+
+		// Check if we have reasonable completeness
+		if attempt > 0 && p.aiClient.LooksReasonablyComplete(fullContent.String(), originalContent, file.Language) {
+			break
+		}
+
+		// Prepare continuation prompt
+		currentPrompt = p.aiClient.BuildContinuationPrompt(fullContent.String(), originalContent, aiReq)
+
+		// If we're on the last attempt, warn the user
+		if attempt == MAX_CONTINUATIONS-1 {
+			p.ui.FileIncompleteWarning(filepath.Base(file.Path), MAX_CONTINUATIONS)
+		}
+	}
+
+	return fullContent.String(), totalTokens, nil
 }
 
 // processGenerate processes files in generate mode
