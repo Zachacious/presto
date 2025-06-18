@@ -106,12 +106,13 @@ type ContextFile struct {
 
 // AIRequest represents a request to the AI service
 type AIRequest struct {
-	Prompt      string
-	Content     string
-	Language    Language
-	MaxTokens   int
-	Temperature float64
-	Mode        ProcessingMode
+	Prompt      string         `json:"prompt"`
+	Content     string         `json:"content,omitempty"`
+	FileName    string         `json:"file_name,omitempty"` // NEW: Current file name
+	Language    Language       `json:"language"`
+	MaxTokens   int            `json:"max_tokens,omitempty"`
+	Temperature float64        `json:"temperature,omitempty"`
+	Mode        ProcessingMode `json:"mode"`
 }
 
 // AIResponse represents a response from the AI service

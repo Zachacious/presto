@@ -143,7 +143,7 @@ func (p *Processor) transformWorker(wg *sync.WaitGroup, jobs <-chan *types.FileI
 	}
 }
 
-// processFile processes a single file
+// Update the processFile function to pass the file name
 func (p *Processor) processFile(file *types.FileInfo, opts *types.ProcessingOptions, contextFiles []*types.ContextFile) *types.ProcessingResult {
 	startTime := time.Now()
 
@@ -168,10 +168,11 @@ func (p *Processor) processFile(file *types.FileInfo, opts *types.ProcessingOpti
 		contentStr = p.commentRemover.RemoveComments(contentStr, file.Language)
 	}
 
-	// Create AI request
+	// Create AI request with file name context
 	aiReq := types.AIRequest{
 		Prompt:      opts.AIPrompt,
 		Content:     contentStr,
+		FileName:    file.Path, // NEW: Include the file name
 		Language:    file.Language,
 		MaxTokens:   opts.MaxTokens,
 		Temperature: opts.Temperature,
