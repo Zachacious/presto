@@ -1,3 +1,5 @@
+![Presto Logo](images/ai1.jpg)
+
 # Presto
 
 > ⚠️ **Important**: Presto is designed for **plaintext file formats only** (code, configuration, documentation, etc.). It does not support binary formats like `.xlsx`, `.docx`, `.pdf`, images, or other non-text files. Always ensure your input files are text-based for proper processing.
