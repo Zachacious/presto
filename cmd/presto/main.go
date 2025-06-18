@@ -33,8 +33,10 @@ func main() {
 		commandName    = flag.String("cmd", "", "Use a predefined command")
 		inputPath      = flag.String("input", "", "Input file or directory path")
 		outputPath     = flag.String("output-file", "", "Output file path (for generate mode)")
-		outputMode     = flag.String("output", "separate", "Output mode: inplace|separate|stdout|file")
+		outputMode     = flag.String("output", "", "Output mode: inplace|directory|separate|file|stdout|preview")
+		outputDir      = flag.String("output-dir", "", "Output directory (for directory mode)")
 		outputSuffix   = flag.String("suffix", ".presto", "Suffix for output files in separate mode")
+		smartSuffix    = flag.Bool("smart-suffix", false, "Insert suffix before extension (e.g., main.presto.go)")
 		recursive      = flag.Bool("recursive", false, "Process directories recursively")
 		filePattern    = flag.String("pattern", "", "File pattern regex to match")
 		excludePattern = flag.String("exclude", "", "File pattern regex to exclude")
@@ -55,7 +57,11 @@ func main() {
 		verbose        = flag.Bool("verbose", false, "Verbose output")
 		maxConcurrent  = flag.Int("concurrent", 3, "Maximum concurrent file processing")
 		backupOriginal = flag.Bool("backup", false, "Create backup of original files")
+		preview        = flag.Bool("preview", false, "Preview changes before saving")
 		saveCommandAs  = flag.String("save-command", "", "Save current options as a named command")
+
+		// Shorthand flags
+		inplace = flag.Bool("inplace", false, "Modify files in place (shorthand for --output inplace)")
 
 		// Variable substitution
 		variables = flag.String("var", "", "Variables for command substitution (VAR=value,VAR2=value2)")
@@ -154,15 +160,49 @@ func main() {
 		}
 	}
 
-	// Build processing options - use types.ProcessingOptions
+	// Determine output mode and backup settings
+	var finalOutputMode types.OutputMode
+	var finalBackup bool
+
+	switch {
+	case *preview:
+		finalOutputMode = types.OutputModePreview
+	case *inplace || *outputMode == "inplace":
+		finalOutputMode = types.OutputModeInPlace
+		finalBackup = *backupOriginal
+	case *outputMode == "directory":
+		finalOutputMode = types.OutputModeDirectory
+		if *outputDir == "" {
+			log.Fatal("❌ --output-dir is required when using directory output mode")
+		}
+	case *outputMode == "separate":
+		finalOutputMode = types.OutputModeSeparate
+	case *outputMode == "file" || (*generateMode && *outputPath != ""):
+		finalOutputMode = types.OutputModeFile
+		if *outputPath == "" && *generateMode {
+			log.Fatal("❌ --output-file is required when using file output mode or generate mode")
+		}
+	case *outputMode == "stdout":
+		finalOutputMode = types.OutputModeStdout
+	case *outputMode == "":
+		// Default behavior: backup + inplace for safety
+		finalOutputMode = types.OutputModeInPlace
+		finalBackup = true // Enable backup by default for safety
+	default:
+		log.Fatalf("❌ Invalid output mode: %s", *outputMode)
+	}
+
+	// Build processing options
 	opts := &types.ProcessingOptions{
 		Mode:            types.ModeTransform,
 		AIPrompt:        *promptText,
 		PromptFile:      *promptFile,
 		InputPath:       *inputPath,
 		OutputPath:      *outputPath,
-		OutputMode:      types.OutputMode(*outputMode),
+		OutputMode:      finalOutputMode,
+		OutputDir:       *outputDir,
 		OutputSuffix:    *outputSuffix,
+		SmartSuffix:     *smartSuffix,
 		ContextFiles:    contextFileList,
 		ContextPatterns: contextPatternList,
 		Recursive:       *recursive,
@@ -172,7 +212,8 @@ func main() {
 		DryRun:          *dryRun,
 		Verbose:         *verbose,
 		MaxConcurrent:   *maxConcurrent,
-		BackupOriginal:  *backupOriginal,
+		BackupOriginal:  finalBackup,
+		Preview:         *preview,
 		Model:           *model,
 		Temperature:     *temperature,
 		MaxTokens:       *maxTokens,
@@ -217,12 +258,11 @@ func main() {
 
 	// Handle missing API key gracefully
 	if cfg.AI.APIKey == "" {
-		fmt.Println("⚠️  No OpenRouter API key found.")
+		fmt.Println("⚠️  No API key found.")
 		fmt.Println("You can:")
-		fmt.Println("1. Set environment variable: export OPENROUTER_API_KEY=\"your-key\"")
+		fmt.Println("1. Set environment variable: export OPENAI_API_KEY=\"your-key\"")
 		fmt.Println("2. Add to config file: ~/.presto/config.yaml")
-		fmt.Println("3. Use --api-key flag")
-		fmt.Println("4. Run 'presto setup' for interactive configuration")
+		fmt.Println("3. Run 'presto configure' for interactive configuration")
 		fmt.Println()
 		fmt.Print("Enter API key now (or Ctrl+C to exit): ")
 
@@ -276,7 +316,7 @@ func main() {
 	showSummary(results, opts.Verbose)
 }
 
-// showSummary displays processing results - use types.ProcessingResult
+// showSummary displays processing results
 func showSummary(results []*types.ProcessingResult, verbose bool) {
 	successful := 0
 	failed := 0
@@ -336,7 +376,7 @@ func showSummary(results []*types.ProcessingResult, verbose bool) {
 	}
 }
 
-// handleSaveCommand saves current options as a command - use types.Command
+// handleSaveCommand saves current options as a command
 func handleSaveCommand(cmdManager *commands.Manager, name string, opts *types.ProcessingOptions) {
 	cmd := &types.Command{
 		Name:        name,
@@ -422,9 +462,6 @@ func handleDeleteCommand(cmdManager *commands.Manager, name string) {
 }
 
 func handleEditCommand(cmdManager *commands.Manager, name string) {
-	// Create a template command file for editing
-	// templatePath := fmt.Sprintf("%s.yaml", name)
-
 	var cmd *types.Command
 	if existingCmd, err := cmdManager.GetCommand(name); err == nil {
 		cmd = existingCmd
@@ -432,8 +469,6 @@ func handleEditCommand(cmdManager *commands.Manager, name string) {
 		cmd = cmdManager.GenerateCommandTemplate(name)
 	}
 
-	// Write template to file for editing
-	// User can then load it with save-command option
 	fmt.Printf("Edit template created for command '%s'\n", name)
 	fmt.Printf("Modify the template and use --save-command to save changes\n")
 	fmt.Printf("Template: %+v\n", cmd)
@@ -450,12 +485,31 @@ BASIC OPTIONS:
   --cmd NAME             Use predefined command
   --input PATH           File or directory to process
   --recursive            Process directories recursively
-  --output MODE          Output mode: inplace|separate|stdout|file
+  --output MODE          Output mode: inplace|directory|separate|file|stdout|preview
   --dry-run              Preview without making changes
 
+OUTPUT MODES:
+  inplace                Modify original files (with --backup for safety)
+  directory              Create parallel directory structure (use --output-dir)
+  separate               Create separate files with suffix (use --smart-suffix)
+  file                   Single output file (use --output-file)
+  stdout                 Print to terminal
+  preview                Show diff and ask where to save
+
 EXAMPLES:
+  # Default: safe in-place with backup
   presto --prompt "Add comments" --input main.go
-  presto --cmd add-docs --input . --recursive
+
+  # Parallel directory structure
+  presto --cmd add-docs --input ./src --output directory --output-dir ./enhanced
+
+  # Smart suffix (preserves extensions)
+  presto --cmd modernize --input . --output separate --smart-suffix --recursive
+
+  # Preview changes first
+  presto --prompt "Improve docs" --input README.md --preview
+
+  # Generate new content
   presto --generate --prompt "Create README" --context *.go --output-file README.md
 
 Run 'presto --help-full' for complete options list.

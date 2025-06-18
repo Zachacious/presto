@@ -51,41 +51,47 @@ const (
 type OutputMode string
 
 const (
-	OutputModeInPlace  OutputMode = "inplace"  // Modify original files
-	OutputModeSeparate OutputMode = "separate" // Create new files with suffix
-	OutputModeStdout   OutputMode = "stdout"   // Print to terminal
-	OutputModeFile     OutputMode = "file"     // Single output file
+	OutputModeInPlace   OutputMode = "inplace"   // Modify original files
+	OutputModeStdout    OutputMode = "stdout"    // Print to terminal
+	OutputModeFile      OutputMode = "file"      // Single output file
+	OutputModeDirectory OutputMode = "directory" // Parallel directory structure
+	OutputModeSeparate  OutputMode = "separate"  // Smart suffix before extension
+	OutputModePreview   OutputMode = "preview"   // Show diff, ask for confirmation
 )
 
 // ProcessingOptions contains all options for file processing
 type ProcessingOptions struct {
-	// Core options
-	Mode         ProcessingMode
-	AIPrompt     string
-	PromptFile   string
-	InputPath    string
-	OutputPath   string
-	OutputMode   OutputMode
-	OutputSuffix string
 
-	// File filtering
-	ContextFiles    []string
-	ContextPatterns []string
-	Recursive       bool
-	FilePattern     string
-	ExcludePattern  string
+	// Input/Output
+	InputPath    string     `json:"input_path"`
+	OutputPath   string     `json:"output_path,omitempty"`
+	OutputMode   OutputMode `json:"output_mode"`
+	OutputDir    string     `json:"output_dir,omitempty"` // For directory mode
+	OutputSuffix string     `json:"output_suffix"`        // For separate mode
+	SmartSuffix  bool       `json:"smart_suffix"`         // Insert before extension
 
-	// Processing options
-	RemoveComments bool
-	DryRun         bool
-	Verbose        bool
-	MaxConcurrent  int
-	BackupOriginal bool
-
-	// AI options
+	// AI Configuration
 	Model       string
-	Temperature float64
-	MaxTokens   int
+	AIPrompt    string         `json:"ai_prompt"`
+	PromptFile  string         `json:"prompt_file,omitempty"`
+	MaxTokens   int            `json:"max_tokens,omitempty"`
+	Temperature float64        `json:"temperature,omitempty"`
+	Mode        ProcessingMode `json:"mode"`
+
+	// File Filtering
+	Recursive       bool     `json:"recursive"`
+	FilePattern     string   `json:"file_pattern,omitempty"`
+	ExcludePattern  string   `json:"exclude_pattern,omitempty"`
+	ContextFiles    []string `json:"context_files,omitempty"`
+	ContextPatterns []string `json:"context_patterns,omitempty"`
+
+	// Processing Options
+	MaxConcurrent  int  `json:"max_concurrent"`
+	BackupOriginal bool `json:"backup_original"` // Create .backup files
+	RemoveComments bool `json:"remove_comments"`
+	DryRun         bool `json:"dry_run"`
+	Verbose        bool `json:"verbose"`
+	Preview        bool `json:"preview"` // Show diff before saving
 }
 
 // FileInfo represents information about a file to be processed

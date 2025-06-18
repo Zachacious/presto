@@ -1,6 +1,7 @@
 package processor
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -258,37 +259,37 @@ func (p *Processor) processGenerate(opts *types.ProcessingOptions, contextFiles 
 }
 
 // handleOutput writes processed content to the appropriate destination
-func (p *Processor) handleOutput(inputFile, content string, opts *types.ProcessingOptions) (string, error) {
-	switch opts.OutputMode {
-	case types.OutputModeStdout:
-		fmt.Print(content)
-		return "stdout", nil
+// func (p *Processor) handleOutput(inputFile, content string, opts *types.ProcessingOptions) (string, error) {
+// 	switch opts.OutputMode {
+// 	case types.OutputModeStdout:
+// 		fmt.Print(content)
+// 		return "stdout", nil
 
-	case types.OutputModeInPlace:
-		// Create backup if requested
-		if opts.BackupOriginal {
-			backupFile := inputFile + ".backup"
-			if err := p.copyFile(inputFile, backupFile); err != nil {
-				return "", fmt.Errorf("failed to create backup: %w", err)
-			}
-		}
+// 	case types.OutputModeInPlace:
+// 		// Create backup if requested
+// 		if opts.BackupOriginal {
+// 			backupFile := inputFile + ".backup"
+// 			if err := p.copyFile(inputFile, backupFile); err != nil {
+// 				return "", fmt.Errorf("failed to create backup: %w", err)
+// 			}
+// 		}
 
-		if err := os.WriteFile(inputFile, []byte(content), 0644); err != nil {
-			return "", err
-		}
-		return inputFile, nil
+// 		if err := os.WriteFile(inputFile, []byte(content), 0644); err != nil {
+// 			return "", err
+// 		}
+// 		return inputFile, nil
 
-	case types.OutputModeSeparate:
-		outputFile := inputFile + opts.OutputSuffix
-		if err := os.WriteFile(outputFile, []byte(content), 0644); err != nil {
-			return "", err
-		}
-		return outputFile, nil
+// 	case types.OutputModeSeparate:
+// 		outputFile := inputFile + opts.OutputSuffix
+// 		if err := os.WriteFile(outputFile, []byte(content), 0644); err != nil {
+// 			return "", err
+// 		}
+// 		return outputFile, nil
 
-	default:
-		return "", fmt.Errorf("unsupported output mode: %s", opts.OutputMode)
-	}
-}
+// 	default:
+// 		return "", fmt.Errorf("unsupported output mode: %s", opts.OutputMode)
+// 	}
+// }
 
 // Helper methods (findFiles, loadContextFiles, etc.) remain mostly the same
 // but I'll include the key ones:
@@ -440,10 +441,228 @@ func (p *Processor) simulateTransform(opts *types.ProcessingOptions, files []*ty
 	return results
 }
 
+// handleOutput processes the AI response and saves it according to output mode
+func (p *Processor) handleOutput(inputFile, content string, opts *types.ProcessingOptions) (string, error) {
+	switch opts.OutputMode {
+	case types.OutputModeInPlace:
+		return p.handleInPlaceOutput(inputFile, content, opts)
+	case types.OutputModeDirectory:
+		return p.handleDirectoryOutput(inputFile, content, opts)
+	case types.OutputModeSeparate:
+		return p.handleSeparateOutput(inputFile, content, opts)
+	case types.OutputModeFile:
+		return p.handleFileOutput(content, opts)
+	case types.OutputModeStdout:
+		return p.handleStdoutOutput(content)
+	case types.OutputModePreview:
+		return p.handlePreviewOutput(inputFile, content, opts)
+	default:
+		return "", fmt.Errorf("unsupported output mode: %s", opts.OutputMode)
+	}
+}
+
+// handleInPlaceOutput modifies the original file (with backup if requested)
+func (p *Processor) handleInPlaceOutput(inputFile, content string, opts *types.ProcessingOptions) (string, error) {
+	if opts.DryRun {
+		return inputFile + " (dry-run)", nil
+	}
+
+	// Create backup if requested
+	if opts.BackupOriginal {
+		backupFile := inputFile + ".backup"
+		if err := p.copyFile(inputFile, backupFile); err != nil {
+			return "", fmt.Errorf("failed to create backup: %w", err)
+		}
+	}
+
+	// Write new content to original file
+	if err := os.WriteFile(inputFile, []byte(content), 0644); err != nil {
+		return "", fmt.Errorf("failed to write file: %w", err)
+	}
+
+	return inputFile, nil
+}
+
+// handleDirectoryOutput creates parallel directory structure
+func (p *Processor) handleDirectoryOutput(inputFile, content string, opts *types.ProcessingOptions) (string, error) {
+	if opts.OutputDir == "" {
+		return "", fmt.Errorf("output directory not specified")
+	}
+
+	// Get relative path from current working directory
+	wd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("failed to get working directory: %w", err)
+	}
+
+	relPath, err := filepath.Rel(wd, inputFile)
+	if err != nil {
+		relPath = filepath.Base(inputFile) // fallback to just filename
+	}
+
+	// Create output path in parallel structure
+	outputFile := filepath.Join(opts.OutputDir, relPath)
+
+	if opts.DryRun {
+		return outputFile + " (dry-run)", nil
+	}
+
+	// Create directory structure
+	outputDir := filepath.Dir(outputFile)
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create output directory: %w", err)
+	}
+
+	// Write content
+	if err := os.WriteFile(outputFile, []byte(content), 0644); err != nil {
+		return "", fmt.Errorf("failed to write file: %w", err)
+	}
+
+	return outputFile, nil
+}
+
+// handleSeparateOutput creates new file with smart suffix
+func (p *Processor) handleSeparateOutput(inputFile, content string, opts *types.ProcessingOptions) (string, error) {
+	var outputFile string
+
+	if opts.SmartSuffix {
+		// Insert suffix before extension: main.go → main.presto.go
+		outputFile = p.addSmartSuffix(inputFile, opts.OutputSuffix)
+	} else {
+		// Traditional suffix: main.go → main.go.presto
+		outputFile = inputFile + opts.OutputSuffix
+	}
+
+	if opts.DryRun {
+		return outputFile + " (dry-run)", nil
+	}
+
+	// Write content to new file
+	if err := os.WriteFile(outputFile, []byte(content), 0644); err != nil {
+		return "", fmt.Errorf("failed to write file: %w", err)
+	}
+
+	return outputFile, nil
+}
+
+// handleFileOutput writes to a specific output file
+func (p *Processor) handleFileOutput(content string, opts *types.ProcessingOptions) (string, error) {
+	if opts.OutputPath == "" {
+		return "", fmt.Errorf("output file path not specified")
+	}
+
+	if opts.DryRun {
+		return opts.OutputPath + " (dry-run)", nil
+	}
+
+	// Create directory if needed
+	outputDir := filepath.Dir(opts.OutputPath)
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create output directory: %w", err)
+	}
+
+	// Write content
+	if err := os.WriteFile(opts.OutputPath, []byte(content), 0644); err != nil {
+		return "", fmt.Errorf("failed to write file: %w", err)
+	}
+
+	return opts.OutputPath, nil
+}
+
+// handleStdoutOutput prints content to stdout
+func (p *Processor) handleStdoutOutput(content string) (string, error) {
+	fmt.Print(content)
+	return "(stdout)", nil
+}
+
+// handlePreviewOutput shows diff and asks for confirmation
+func (p *Processor) handlePreviewOutput(inputFile, newContent string, opts *types.ProcessingOptions) (string, error) {
+	// Read original content
+	originalContent, err := os.ReadFile(inputFile)
+	if err != nil {
+		return "", fmt.Errorf("failed to read original file: %w", err)
+	}
+
+	// Show diff (simplified - you could use a proper diff library)
+	fmt.Printf("\n=== PREVIEW: %s ===\n", inputFile)
+	fmt.Printf("Original length: %d bytes\n", len(originalContent))
+	fmt.Printf("New length: %d bytes\n", len(newContent))
+	fmt.Printf("\nFirst 500 characters of new content:\n")
+	fmt.Printf("---\n")
+	if len(newContent) > 500 {
+		fmt.Printf("%s...\n", newContent[:500])
+	} else {
+		fmt.Printf("%s\n", newContent)
+	}
+	fmt.Printf("---\n")
+
+	// Ask user what to do
+	fmt.Printf("\nOptions:\n")
+	fmt.Printf("1. Save in-place (replace original)\n")
+	fmt.Printf("2. Save with backup (.backup)\n")
+	fmt.Printf("3. Save as separate file (.presto)\n")
+	fmt.Printf("4. Save to custom file\n")
+	fmt.Printf("5. Skip this file\n")
+	fmt.Printf("Choice (1-5): ")
+
+	scanner := bufio.NewScanner(os.Stdin)
+	if !scanner.Scan() {
+		return "", fmt.Errorf("failed to read user input")
+	}
+
+	choice := strings.TrimSpace(scanner.Text())
+	switch choice {
+	case "1":
+		return p.handleInPlaceOutput(inputFile, newContent, &types.ProcessingOptions{
+			DryRun: opts.DryRun,
+		})
+	case "2":
+		return p.handleInPlaceOutput(inputFile, newContent, &types.ProcessingOptions{
+			BackupOriginal: true,
+			DryRun:         opts.DryRun,
+		})
+	case "3":
+		return p.handleSeparateOutput(inputFile, newContent, &types.ProcessingOptions{
+			OutputSuffix: ".presto",
+			SmartSuffix:  true,
+			DryRun:       opts.DryRun,
+		})
+	case "4":
+		fmt.Printf("Enter output file path: ")
+		if !scanner.Scan() {
+			return "", fmt.Errorf("failed to read file path")
+		}
+		customPath := strings.TrimSpace(scanner.Text())
+		return p.handleFileOutput(newContent, &types.ProcessingOptions{
+			OutputPath: customPath,
+			DryRun:     opts.DryRun,
+		})
+	case "5":
+		return "(skipped)", nil
+	default:
+		return "", fmt.Errorf("invalid choice: %s", choice)
+	}
+}
+
+// addSmartSuffix inserts suffix before file extension
+func (p *Processor) addSmartSuffix(filename, suffix string) string {
+	ext := filepath.Ext(filename)
+	if ext == "" {
+		// No extension, just append suffix
+		return filename + suffix
+	}
+
+	// Insert suffix before extension
+	base := strings.TrimSuffix(filename, ext)
+	return base + suffix + ext
+}
+
+// copyFile creates a copy of the source file
 func (p *Processor) copyFile(src, dst string) error {
-	content, err := os.ReadFile(src)
+	sourceContent, err := os.ReadFile(src)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(dst, content, 0644)
+
+	return os.WriteFile(dst, sourceContent, 0644)
 }
