@@ -47,6 +47,9 @@ func main() {
 		contextFiles    = flag.String("context", "", "Comma-separated context file paths")
 		contextPatterns = flag.String("context-pattern", "", "Comma-separated context file patterns")
 
+		systemPrompt     = flag.String("system-prompt", "", "Override system prompt")
+		systemPromptFile = flag.String("system-prompt-file", "", "Load system prompt from text file")
+
 		// AI options
 		model       = flag.String("model", "", "AI model to use")
 		temperature = flag.Float64("temperature", 0, "AI temperature (0.0-2.0)")
@@ -194,29 +197,31 @@ func main() {
 
 	// Build processing options
 	opts := &types.ProcessingOptions{
-		Mode:            types.ModeTransform,
-		AIPrompt:        *promptText,
-		PromptFile:      *promptFile,
-		InputPath:       *inputPath,
-		OutputPath:      *outputPath,
-		OutputMode:      finalOutputMode,
-		OutputDir:       *outputDir,
-		OutputSuffix:    *outputSuffix,
-		SmartSuffix:     *smartSuffix,
-		ContextFiles:    contextFileList,
-		ContextPatterns: contextPatternList,
-		Recursive:       *recursive,
-		FilePattern:     *filePattern,
-		ExcludePattern:  *excludePattern,
-		RemoveComments:  *removeComments,
-		DryRun:          *dryRun,
-		Verbose:         *verbose,
-		MaxConcurrent:   *maxConcurrent,
-		BackupOriginal:  finalBackup,
-		Preview:         *preview,
-		Model:           *model,
-		Temperature:     *temperature,
-		MaxTokens:       *maxTokens,
+		Mode:             types.ModeTransform,
+		AIPrompt:         *promptText,
+		PromptFile:       *promptFile,
+		InputPath:        *inputPath,
+		OutputPath:       *outputPath,
+		OutputMode:       finalOutputMode,
+		OutputDir:        *outputDir,
+		OutputSuffix:     *outputSuffix,
+		SmartSuffix:      *smartSuffix,
+		ContextFiles:     contextFileList,
+		ContextPatterns:  contextPatternList,
+		Recursive:        *recursive,
+		FilePattern:      *filePattern,
+		ExcludePattern:   *excludePattern,
+		RemoveComments:   *removeComments,
+		DryRun:           *dryRun,
+		Verbose:          *verbose,
+		MaxConcurrent:    *maxConcurrent,
+		BackupOriginal:   finalBackup,
+		Preview:          *preview,
+		Model:            *model,
+		Temperature:      *temperature,
+		MaxTokens:        *maxTokens,
+		SystemPrompt:     *systemPrompt,
+		SystemPromptFile: *systemPromptFile,
 	}
 
 	if *generateMode {

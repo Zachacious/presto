@@ -92,6 +92,10 @@ type ProcessingOptions struct {
 	DryRun         bool `json:"dry_run"`
 	Verbose        bool `json:"verbose"`
 	Preview        bool `json:"preview"` // Show diff before saving
+
+	// system prompt
+	SystemPrompt     string `json:"system_prompt"`
+	SystemPromptFile string `json:"system_prompt_file"`
 }
 
 // FileInfo represents information about a file to be processed

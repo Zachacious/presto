@@ -17,6 +17,17 @@ import (
 	"github.com/Zachacious/presto/pkg/types"
 )
 
+// Default system prompt focused on complete file output
+const DEFAULT_SYSTEM_PROMPT = `CRITICAL INSTRUCTIONS:
+- You must return the COMPLETE file content with your changes applied
+- Return ONLY the file content - no explanations, no markdown blocks, no commentary
+- Do not truncate or summarize - include every line of the original file
+- Apply the requested changes but preserve all other content exactly
+- Do not add explanatory comments about what you changed
+- The response will be written directly to a file, so it must be valid, complete file content
+
+IMPORTANT: Do exactly what is asked and nothing else. Do not add extra features, improvements, or changes beyond the specific request.`
+
 // Processor handles file processing operations
 type Processor struct {
 	aiClient       *ai.Client
@@ -144,6 +155,25 @@ func (p *Processor) transformWorker(wg *sync.WaitGroup, jobs <-chan *types.FileI
 	}
 }
 
+func (p *Processor) getSystemPrompt(opts *types.ProcessingOptions) (string, error) {
+	// 1. File override takes priority
+	if opts.SystemPromptFile != "" {
+		content, err := os.ReadFile(opts.SystemPromptFile)
+		if err != nil {
+			return "", fmt.Errorf("failed to read system prompt file: %w", err)
+		}
+		return strings.TrimSpace(string(content)), nil
+	}
+
+	// 2. Direct override
+	if opts.SystemPrompt != "" {
+		return opts.SystemPrompt, nil
+	}
+
+	// 3. Default
+	return DEFAULT_SYSTEM_PROMPT, nil
+}
+
 // Update the processFile function to pass the file name
 func (p *Processor) processFile(file *types.FileInfo, opts *types.ProcessingOptions, contextFiles []*types.ContextFile) *types.ProcessingResult {
 	startTime := time.Now()
@@ -169,25 +199,25 @@ func (p *Processor) processFile(file *types.FileInfo, opts *types.ProcessingOpti
 		contentStr = p.commentRemover.RemoveComments(contentStr, file.Language)
 	}
 
-	// Build prompt with mode-specific instructions
+	// Get system prompt
+	systemPrompt, err := p.getSystemPrompt(opts)
+	if err != nil {
+		result.Error = fmt.Errorf("failed to get system prompt: %w", err)
+		result.Duration = time.Since(startTime)
+		return result
+	}
+
+	// Build final prompt
 	var finalPrompt string
 	if opts.Mode == types.ModeTransform {
-		finalPrompt = `CRITICAL INSTRUCTIONS FOR FILE TRANSFORMATION:
-- You must return the COMPLETE file content with your changes applied
-- Return ONLY the file content - no explanations, no markdown blocks, no commentary
-- Do not truncate or summarize - include every line of the original file
-- Apply the requested changes but preserve all other content exactly
-- Do not add explanatory comments about what you changed
-- The response will be written directly to a file, so it must be valid, complete file content
-
-IMPORTANT: Do exactly what is asked and nothing else. Do not add extra features, improvements, or changes beyond the specific request.
-
-` + opts.AIPrompt
+		// For transform: system prompt + user prompt
+		finalPrompt = systemPrompt + "\n\n" + opts.AIPrompt
 	} else {
+		// For generate: just user prompt (no file constraints needed)
 		finalPrompt = opts.AIPrompt
 	}
 
-	// Create AI request with file name context
+	// Create AI request
 	aiReq := types.AIRequest{
 		Prompt:      finalPrompt,
 		Content:     contentStr,
@@ -244,15 +274,22 @@ func (p *Processor) processGenerate(opts *types.ProcessingOptions, contextFiles 
 		Mode:       types.ModeGenerate,
 	}
 
-	// Build prompt with constraint
-	finalPrompt := `IMPORTANT: Do exactly what is asked and nothing else. Do not add extra features, improvements, or changes beyond the specific request.
-
-` + opts.AIPrompt
+	// For generate mode, system prompt is optional
+	finalPrompt := opts.AIPrompt
+	if opts.SystemPrompt != "" || opts.SystemPromptFile != "" {
+		systemPrompt, err := p.getSystemPrompt(opts)
+		if err != nil {
+			result.Error = fmt.Errorf("failed to get system prompt: %w", err)
+			result.Duration = time.Since(startTime)
+			return []*types.ProcessingResult{result}, nil
+		}
+		finalPrompt = systemPrompt + "\n\n" + opts.AIPrompt
+	}
 
 	// Create AI request for generation
 	aiReq := types.AIRequest{
 		Prompt:      finalPrompt,
-		Content:     "", // No specific content for generation
+		Content:     "",
 		Language:    types.LangText,
 		MaxTokens:   opts.MaxTokens,
 		Temperature: opts.Temperature,
