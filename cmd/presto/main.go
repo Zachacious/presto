@@ -14,8 +14,10 @@ import (
 	"github.com/Zachacious/presto/pkg/types"
 )
 
-const (
-	version = "0.1.0"
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
 )
 
 func main() {
@@ -83,7 +85,7 @@ func main() {
 
 	// Handle utility commands first
 	if *showVersion {
-		fmt.Printf("Presto v%s\n", version)
+		fmt.Printf("Presto v%s (commit %s, built %s)\n", version, commit, date)
 		return
 	}
 

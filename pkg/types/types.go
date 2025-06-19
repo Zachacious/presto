@@ -212,37 +212,37 @@ func GetDefaultAPIConfig(provider AIProvider) APIConfig {
 		return APIConfig{
 			Provider:    ProviderOpenAI,
 			BaseURL:     "https://api.openai.com/v1",
-			Model:       "gpt-4",
-			MaxTokens:   4000,
+			Model:       "gpt-4.1",
+			MaxTokens:   32000,
 			Temperature: 0.1,
-			Timeout:     60,
+			Timeout:     60 * 3,
 		}
 	case ProviderAnthropic:
 		return APIConfig{
 			Provider:    ProviderAnthropic,
 			BaseURL:     "https://api.anthropic.com/v1",
 			Model:       "claude-3-5-sonnet-20241022",
-			MaxTokens:   4000,
+			MaxTokens:   32000,
 			Temperature: 0.1,
-			Timeout:     60,
+			Timeout:     60 * 3,
 		}
 	case ProviderLocal:
 		return APIConfig{
 			Provider:    ProviderLocal,
 			BaseURL:     "http://localhost:1234/v1", // Common local API port
 			Model:       "local-model",
-			MaxTokens:   4000,
+			MaxTokens:   32000,
 			Temperature: 0.1,
-			Timeout:     60,
+			Timeout:     60 * 3,
 		}
 	default:
 		return APIConfig{
 			Provider:    ProviderCustom,
 			BaseURL:     "https://api.openai.com/v1",
-			Model:       "gpt-4",
-			MaxTokens:   4000,
+			Model:       "gpt-4.1",
+			MaxTokens:   32000,
 			Temperature: 0.1,
-			Timeout:     60,
+			Timeout:     60 * 3,
 		}
 	}
 }
