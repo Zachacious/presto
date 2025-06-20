@@ -4,23 +4,31 @@ set -euo pipefail
 IFS=$'\n\t'
 
 # Configuration
-MAKEFILE_PATH="cmd/presto/Makefile"
+MAKEFILE="cmd/presto/Makefile"
 DIST_DIR="dist"
 REPO="github.com/Zachacious/presto"
 
-# Usage message
-usage() {
-  echo "Usage: $0 v1.0.2 \"Release notes or changelog\""
-  exit 1
-}
+# Defaults
+BUMP="patch"
+NOTES=""
 
-# Check inputs
-if [[ $# -lt 2 ]]; then usage; fi
-
-VERSION="$1"
-NOTES="$2"
-
-if [[ -z "$VERSION" ]]; then usage; fi
+# Parse arguments and flags
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --major) BUMP="major"; shift ;;
+    --minor) BUMP="minor"; shift ;;
+    --patch) BUMP="patch"; shift ;;
+    -m|--message)
+      NOTES="$2"
+      shift 2
+      ;;
+    *)
+      echo "❌ Unknown option: $1"
+      echo "Usage: ./release.sh [--major|--minor|--patch] -m \"Changelog message\""
+      exit 1
+      ;;
+  esac
+done
 
 # Ensure GitHub CLI is available
 if ! command -v gh >/dev/null 2>&1; then
@@ -28,37 +36,65 @@ if ! command -v gh >/dev/null 2>&1; then
   exit 2
 fi
 
-# Clean and validate Go modules
-echo "📦 Tidying modules..."
-go mod tidy
-
-# Ensure clean working directory
+# Ensure working directory is clean
 if ! git diff-index --quiet HEAD --; then
   echo "❌ Uncommitted changes found. Commit or stash before releasing."
   exit 1
 fi
 
-# Tag and push
-echo "🏷️  Tagging release ${VERSION}..."
-git tag "${VERSION}"
-git push origin main
-git push origin "${VERSION}"
+# Get latest version tag (default to v0.0.0 if none)
+LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+VERSION_REGEX="^v([0-9]+)\.([0-9]+)\.([0-9]+)$"
 
-# Build release artifacts
+if [[ $LATEST_TAG =~ $VERSION_REGEX ]]; then
+  MAJOR="${BASH_REMATCH[1]}"
+  MINOR="${BASH_REMATCH[2]}"
+  PATCH="${BASH_REMATCH[3]}"
+else
+  echo "❌ Failed to parse latest version tag: $LATEST_TAG"
+  exit 1
+fi
+
+# Calculate next version
+case "$BUMP" in
+  major)
+    ((MAJOR++)); MINOR=0; PATCH=0 ;;
+  minor)
+    ((MINOR++)); PATCH=0 ;;
+  patch)
+    ((PATCH++)) ;;
+esac
+
+NEW_VERSION="v$MAJOR.$MINOR.$PATCH"
+
+echo "🔖 Latest tag: $LATEST_TAG"
+echo "📈 Bumping $BUMP → $NEW_VERSION"
+
+if [[ -z "$NOTES" ]]; then
+  echo "⚠️  No changelog message provided. Use: -m \"your message\""
+  read -p "Enter changelog notes: " NOTES
+fi
+
+# Tag and push
+echo "🏷️  Tagging release ${NEW_VERSION}..."
+git tag "${NEW_VERSION}"
+git push origin main
+git push origin "${NEW_VERSION}"
+
+# Build release
 echo "🔨 Building release artifacts..."
-make -f "$MAKEFILE_PATH" release
+make -f "$MAKEFILE" release
 
 # Upload to GitHub
 echo "🚀 Creating GitHub release and uploading artifacts..."
-gh release create "${VERSION}" "${DIST_DIR}"/* \
-  --title "${VERSION}" \
+gh release create "${NEW_VERSION}" "${DIST_DIR}"/* \
+  --title "${NEW_VERSION}" \
   --notes "${NOTES}"
 
-echo "✅ Release ${VERSION} published!"
+# Notify Go Proxy
+echo "📣 Notifying pkg.go.dev..."
+go list -m "$REPO@$NEW_VERSION" || true
+curl -sSf "https://proxy.golang.org/$REPO/@v/$NEW_VERSION.info" > /dev/null || true
 
-# Notify pkg.go.dev
-echo "📣 Requesting pkg.go.dev to fetch new version..."
-go list -m "${REPO}@${VERSION}" || true
-curl -sSf "https://proxy.golang.org/${REPO}/@v/${VERSION}.info" > /dev/null || true
-
-echo "🌐 Visit https://pkg.go.dev/${REPO}@${VERSION} to verify indexing."
+echo "✅ Release ${NEW_VERSION} published!"
+echo "🌐 Visit: https://pkg.go.dev/$REPO@$NEW_VERSION"
