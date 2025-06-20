@@ -6,43 +6,40 @@ set -euo pipefail
 REPO="github.com/Zachacious/presto" # Your GitHub repo (user/repo)
 MAIN_BRANCH="main"                  # Or "master"
 INITIAL_VERSION="v0.1.0"            # The version for the very first release
-NETWORK_TIMEOUT="30s"               # How long to wait for network commands
 
 # === SCRIPT LOGIC ===
 
-# Check for required tools
+# --- Initial Health Checks ---
 if ! command -v gh >/dev/null 2>&1; then
     echo "❌ GitHub CLI (gh) is required but not found. Please install it: https://cli.github.com/"
     exit 1
 fi
-# Check for the timeout command
-if ! command -v timeout >/dev/null 2>&1; then
-    echo "❌ 'timeout' command is not available. Please install it (usually part of 'coreutils')."
+
+if ! git diff-index --quiet HEAD --; then
+    echo "❌ Uncommitted changes detected. Please commit or stash them before running a release."
+    git status --short
     exit 1
 fi
 
-# Ensure we are on the main branch and it's up-to-date
+# --- Git Synchronization ---
 echo "🔄 Switching to '$MAIN_BRANCH' and pulling latest changes..."
 git checkout "$MAIN_BRANCH"
-if ! timeout "$NETWORK_TIMEOUT" git pull origin "$MAIN_BRANCH"; then
-    echo "❌ Network Error: Failed to pull from origin. Please check your connection and authentication."
+
+# By setting GIT_TERMINAL_PROMPT=0, we tell Git to fail immediately
+# if it needs to interactively ask for credentials, instead of hanging.
+if ! GIT_TERMINAL_PROMPT=0 git pull origin "$MAIN_BRANCH"; then
+    echo "❌ Git Error: Failed to pull from origin. Please ensure your git credentials (SSH key, PAT) are configured correctly and do not require interactive prompting."
     exit 1
 fi
 
-# Ensure working directory is clean
-if ! git diff-index --quiet HEAD --; then
-    echo "❌ Uncommitted changes detected. Please commit or stash them before releasing."
-    exit 1
-fi
-
-echo "🔄 Fetching latest tags from remote..."
-if ! timeout "$NETWORK_TIMEOUT" git fetch --tags --force; then
-    echo "❌ Network Error: Failed to fetch tags from remote. Please check your connection and authentication."
+echo "🔄 Fetching all tags from the 'origin' remote..."
+if ! GIT_TERMINAL_PROMPT=0 git fetch origin --tags --force; then
+    echo "❌ Git Error: Failed to fetch tags. Please ensure your git credentials are configured correctly."
     exit 1
 fi
 
 # --- Argument Parsing ---
-BUMP="patch" # Default bump type
+BUMP="patch"
 VERSION=""
 NOTES=""
 while [[ $# -gt 0 ]]; do
@@ -105,8 +102,8 @@ echo "1. Tagging version $VERSION..."
 git tag -a "$VERSION" -m "Release $VERSION"
 
 echo "2. Pushing tag to GitHub..."
-if ! timeout "$NETWORK_TIMEOUT" git push origin "$VERSION"; then
-    echo "❌ Network Error: Failed to push the new tag. Please check your connection and permissions."
+if ! GIT_TERMINAL_PROMPT=0 git push origin "$VERSION"; then
+    echo "❌ Git Error: Failed to push the new tag. Please check your permissions and credentials."
     # Attempt to clean up the failed tag locally
     git tag -d "$VERSION"
     exit 1
