@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
 
-set -x
-
 set -euo pipefail
 
 # === CONFIGURATION ===
@@ -27,10 +25,8 @@ fi
 echo "🔄 Switching to '$MAIN_BRANCH' and pulling latest changes..."
 git checkout "$MAIN_BRANCH"
 
-# By setting GIT_TERMINAL_PROMPT=0, we tell Git to fail immediately
-# if it needs to interactively ask for credentials, instead of hanging.
 if ! GIT_TERMINAL_PROMPT=0 git pull origin "$MAIN_BRANCH"; then
-    echo "❌ Git Error: Failed to pull from origin. Please ensure your git credentials (SSH key, PAT) are configured correctly and do not require interactive prompting."
+    echo "❌ Git Error: Failed to pull from origin. Please ensure your git credentials are configured correctly."
     exit 1
 fi
 
@@ -56,12 +52,11 @@ while [[ $# -gt 0 ]]; do
 done
 
 # --- Detect and Calculate Version ---
+# This logic block is the corrected part.
 if [[ -z "$VERSION" ]]; then
-    LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null)
-    if [[ -z "$LATEST_TAG" ]]; then
-        echo "🔍 No existing tags found. Creating initial release."
-        VERSION="$INITIAL_VERSION"
-    else
+    # We check if the 'git describe' command SUCCEEDS. If it fails, it means no tags exist.
+    if LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null); then
+        # The command succeeded, so tags exist.
         echo "🔍 Latest tag found: $LATEST_TAG"
         if [[ $LATEST_TAG =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
             MAJOR="${BASH_REMATCH[1]}"
@@ -77,6 +72,10 @@ if [[ -z "$VERSION" ]]; then
             patch) ((PATCH++)) ;;
         esac
         VERSION="v$MAJOR.$MINOR.$PATCH"
+    else
+        # The command failed, which means no tags were found.
+        echo "🔍 No existing tags found. Creating initial release."
+        VERSION="$INITIAL_VERSION"
     fi
 fi
 
@@ -106,7 +105,6 @@ git tag -a "$VERSION" -m "Release $VERSION"
 echo "2. Pushing tag to GitHub..."
 if ! GIT_TERMINAL_PROMPT=0 git push origin "$VERSION"; then
     echo "❌ Git Error: Failed to push the new tag. Please check your permissions and credentials."
-    # Attempt to clean up the failed tag locally
     git tag -d "$VERSION"
     exit 1
 fi
@@ -127,5 +125,3 @@ echo "5. Notifying Go proxy..."
 
 echo ""
 echo "✅ Release $VERSION completed successfully!"
-echo "   Visit the release page at: https://github.com/$REPO/releases/tag/$VERSION"
-echo "   Track the package on: https://pkg.go.dev/$REPO@$VERSION"
