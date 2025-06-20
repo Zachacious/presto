@@ -1,19 +1,43 @@
 #!/usr/bin/env bash
 
 set -euo pipefail
-IFS=$'\n\t'
 
-# Paths
-MAKEFILE="cmd/presto/Makefile"
-DIST_DIR="dist"
-REPO="github.com/Zachacious/presto"
+# === CONFIGURATION ===
+REPO="github.com/Zachacious/presto" # Your GitHub repo (user/repo)
+MAIN_BRANCH="main"                  # Or "master"
 
-# Inputs
+# === SCRIPT LOGIC ===
+
+# Check for required tools
+if ! command -v gh >/dev/null 2>&1; then
+    echo "❌ GitHub CLI (gh) is required but not found. Please install it: https://cli.github.com/"
+    exit 1
+fi
+
+# Ensure we are on the main branch and it's up-to-date
+echo "🔄 Switching to '$MAIN_BRANCH' and pulling latest changes..."
+git checkout "$MAIN_BRANCH"
+git pull origin "$MAIN_BRANCH"
+
+# Ensure working directory is clean
+if ! git diff-index --quiet HEAD --; then
+    echo "❌ Uncommitted changes detected. Please commit or stash them before releasing."
+    exit 1
+fi
+
+echo "🔄 Fetching latest tags from remote..."
+git fetch --tags --force
+
+# Find the latest tag. If no tags exist, start from v0.0.0.
+LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+echo "🔍 Latest tag found: $LATEST_TAG"
+
+# Determine how to bump the version. Default to a patch bump.
+BUMP="patch"
 VERSION=""
-BUMP=""
 NOTES=""
 
-# --- Parse args ---
+# Parse command-line arguments
 while [[ $# -gt 0 ]]; do
   case "$1" in
     v*.*.*) VERSION="$1"; shift ;;
@@ -21,92 +45,71 @@ while [[ $# -gt 0 ]]; do
     --minor) BUMP="minor"; shift ;;
     --patch) BUMP="patch"; shift ;;
     -m|--message) NOTES="$2"; shift 2 ;;
-    *)
-      echo "❌ Unknown argument: $1"
-      echo "Usage:"
-      echo "  ./release.sh v1.2.4 -m \"Release notes...\""
-      echo "  ./release.sh --minor -m \"Release notes...\""
-      exit 1
-      ;;
+    *) echo "❌ Unknown argument: $1"; exit 1 ;;
   esac
 done
 
-# Require gh CLI
-if ! command -v gh >/dev/null 2>&1; then
-  echo "❌ GitHub CLI (gh) required: https://cli.github.com/"
-  exit 1
-fi
-
-# Ensure clean working directory
-if ! git diff-index --quiet HEAD --; then
-  echo "❌ Uncommitted changes! Please commit or stash first."
-  exit 1
-fi
-
-# Determine version if not explicitly provided
+# If a specific version isn't provided, calculate the next one
 if [[ -z "$VERSION" ]]; then
-  LATEST=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
-  echo "🔍 Latest tag: $LATEST"
+    if [[ $LATEST_TAG =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+        MAJOR="${BASH_REMATCH[1]}"
+        MINOR="${BASH_REMATCH[2]}"
+        PATCH="${BASH_REMATCH[3]}"
+    else
+        echo "❌ Invalid latest tag format: '$LATEST_TAG'. Expected vX.Y.Z"
+        exit 1
+    fi
 
-  if [[ $LATEST =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
-    MAJOR="${BASH_REMATCH[1]}"
-    MINOR="${BASH_REMATCH[2]}"
-    PATCH="${BASH_REMATCH[3]}"
-  else
-    echo "❌ Invalid latest tag: $LATEST"
+    case "$BUMP" in
+        major) ((MAJOR++)); MINOR=0; PATCH=0 ;;
+        minor) ((MINOR++)); PATCH=0 ;;
+        patch) ((PATCH++)) ;;
+    esac
+    VERSION="v$MAJOR.$MINOR.$PATCH"
+fi
+
+# --- Confirmation Step ---
+echo "✅ New version will be: $VERSION"
+read -p "   Are you sure you want to proceed with tagging? (y/N) " -n 1 -r
+echo
+if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+    echo "🛑 Release cancelled."
     exit 1
-  fi
-
-  case "$BUMP" in
-    major)   ((MAJOR++)); MINOR=0; PATCH=0 ;;
-    minor)   ((MINOR++)); PATCH=0 ;;
-    patch|"") ((PATCH++)) ;;
-    *)
-      echo "❌ Unknown bump type: $BUMP"
-      exit 1
-      ;;
-  esac
-
-  VERSION="v$MAJOR.$MINOR.$PATCH"
 fi
 
-# Validate version format
-if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  echo "❌ Invalid version format: $VERSION"
-  exit 1
-fi
-
-# Get release notes
+# Get release notes from the user if not provided via the -m flag
 if [[ -z "$NOTES" ]]; then
-  echo "✏️  Enter release notes (end with Ctrl+D):"
-  NOTES=$(</dev/stdin)
+    echo "✏️ Please enter the release notes. End with Ctrl+D."
+    NOTES=$(</dev/stdin)
 fi
-
 if [[ -z "$NOTES" ]]; then
-  echo "❌ Release notes are required."
-  exit 1
+    echo "❌ Release notes cannot be empty."
+    exit 1
 fi
 
-# Tag + push
-echo "🏷️  Tagging $VERSION..."
-git tag "$VERSION"
-git push origin main
+# --- Execution Step ---
+echo "1. Tagging version $VERSION..."
+git tag -a "$VERSION" -m "Release $VERSION"
+
+echo "2. Pushing tag to GitHub..."
 git push origin "$VERSION"
 
-# Build
-echo "🔨 Building release artifacts..."
-make -f "$MAKEFILE" release
+echo "3. Building release artifacts using 'make'..."
+# The Makefile will now automatically use the new tag via `git describe`
+make release
 
-# Create GitHub release
-echo "🚀 Creating GitHub release..."
-gh release create "$VERSION" "$DIST_DIR"/* \
-  --title "$VERSION" \
-  --notes "$NOTES"
+echo "4. Creating GitHub Release..."
+gh release create "$VERSION" dist/* \
+    --title "$VERSION" \
+    --notes "$NOTES"
 
-# Trigger Go proxy indexing
-echo "📣 Notifying Go proxy..."
-go list -m "$REPO@$VERSION" || true
-curl -sSf "https://proxy.golang.org/$REPO/@v/$VERSION.info" > /dev/null || true
+echo "5. Notifying Go proxy..."
+(
+  go list -m "$REPO@$VERSION" &>/dev/null
+  curl -sSf "https://proxy.golang.org/$REPO/@v/$VERSION.info" > /dev/null
+) &
 
-echo "✅ Release $VERSION completed!"
-echo "🌍 https://pkg.go.dev/$REPO@$VERSION"
+echo ""
+echo "✅ Release $VERSION completed successfully!"
+echo "   Visit the release page at: https://github.com/$REPO/releases/tag/$VERSION"
+echo "   Track the package on: https://pkg.go.dev/$REPO@$VERSION"
