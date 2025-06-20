@@ -5,6 +5,7 @@ set -euo pipefail
 # === CONFIGURATION ===
 REPO="github.com/Zachacious/presto" # Your GitHub repo (user/repo)
 MAIN_BRANCH="main"                  # Or "master"
+INITIAL_VERSION="v0.1.0"            # The version for the very first release
 
 # === SCRIPT LOGIC ===
 
@@ -28,16 +29,10 @@ fi
 echo "🔄 Fetching latest tags from remote..."
 git fetch --tags --force
 
-# Find the latest tag. If no tags exist, start from v0.0.0.
-LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
-echo "🔍 Latest tag found: $LATEST_TAG"
-
-# Determine how to bump the version. Default to a patch bump.
-BUMP="patch"
+# --- Argument Parsing ---
+BUMP="patch" # Default bump type
 VERSION=""
 NOTES=""
-
-# Parse command-line arguments
 while [[ $# -gt 0 ]]; do
   case "$1" in
     v*.*.*) VERSION="$1"; shift ;;
@@ -49,24 +44,37 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# If a specific version isn't provided, calculate the next one
+# --- Detect and Calculate Version ---
+# If a version was not explicitly passed as an argument, calculate it.
 if [[ -z "$VERSION" ]]; then
-    if [[ $LATEST_TAG =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
-        MAJOR="${BASH_REMATCH[1]}"
-        MINOR="${BASH_REMATCH[2]}"
-        PATCH="${BASH_REMATCH[3]}"
-    else
-        echo "❌ Invalid latest tag format: '$LATEST_TAG'. Expected vX.Y.Z"
-        exit 1
-    fi
+    # Try to get the latest tag. The `2>/dev/null` silences errors if no tags exist.
+    LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null)
 
-    case "$BUMP" in
-        major) ((MAJOR++)); MINOR=0; PATCH=0 ;;
-        minor) ((MINOR++)); PATCH=0 ;;
-        patch) ((PATCH++)) ;;
-    esac
-    VERSION="v$MAJOR.$MINOR.$PATCH"
+    if [[ -z "$LATEST_TAG" ]]; then
+        # This is the first release scenario
+        echo "🔍 No existing tags found. Creating initial release."
+        VERSION="$INITIAL_VERSION"
+    else
+        # Tags exist, so we bump the latest one
+        echo "🔍 Latest tag found: $LATEST_TAG"
+        if [[ $LATEST_TAG =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            MAJOR="${BASH_REMATCH[1]}"
+            MINOR="${BASH_REMATCH[2]}"
+            PATCH="${BASH_REMATCH[3]}"
+        else
+            echo "❌ Invalid latest tag format: '$LATEST_TAG'. Expected vX.Y.Z"
+            exit 1
+        fi
+
+        case "$BUMP" in
+            major) ((MAJOR++)); MINOR=0; PATCH=0 ;;
+            minor) ((MINOR++)); PATCH=0 ;;
+            patch) ((PATCH++)) ;;
+        esac
+        VERSION="v$MAJOR.$MINOR.$PATCH"
+    fi
 fi
+
 
 # --- Confirmation Step ---
 echo "✅ New version will be: $VERSION"
@@ -87,6 +95,7 @@ if [[ -z "$NOTES" ]]; then
     exit 1
 fi
 
+
 # --- Execution Step ---
 echo "1. Tagging version $VERSION..."
 git tag -a "$VERSION" -m "Release $VERSION"
@@ -95,7 +104,6 @@ echo "2. Pushing tag to GitHub..."
 git push origin "$VERSION"
 
 echo "3. Building release artifacts using 'make'..."
-# The Makefile will now automatically use the new tag via `git describe`
 make release
 
 echo "4. Creating GitHub Release..."
