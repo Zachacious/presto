@@ -25,41 +25,41 @@ build: $(DIST)/$(BINARY)
 
 # Local build target
 $(DIST)/$(BINARY):
-    @mkdir -p $(DIST)
-    go build -trimpath -ldflags="$(LDFLAGS)" -o $(DIST)/$(BINARY) cmd/presto/main.go
+	@mkdir -p $(DIST)
+	go build -trimpath -ldflags="$(LDFLAGS)" -o $(DIST)/$(BINARY) cmd/presto/main.go
 
 # Cross-platform builds for all defined platforms
 all: $(PLATFORMS:%=$(DIST)/$(BINARY)-%)
 
 $(DIST)/$(BINARY)-%:
-    @platform="$*"; \
-    os=$${platform%-*}; arch=$${platform#*-}; \
-    outfile="$(DIST)/$(BINARY)-$$os-$$arch"; \
-    [ "$$os" = "windows" ] && outfile="$$outfile.exe"; \
-    mkdir -p $(DIST); \
-    echo "--> Building for $$os/$$arch..."; \
-    GOOS=$$os GOARCH=$$arch CGO_ENABLED=0 \
-    go build -trimpath -ldflags="$(LDFLAGS)" -o "$$outfile" cmd/presto/main.go
+	@platform="$*"; \
+	os=$${platform%-*}; arch=$${platform#*-}; \
+	outfile="$(DIST)/$(BINARY)-$$os-$$arch"; \
+	[ "$$os" = "windows" ] && outfile="$$outfile.exe"; \
+	mkdir -p $(DIST); \
+	echo "--> Building for $$os/$$arch..."; \
+	GOOS=$$os GOARCH=$$arch CGO_ENABLED=0 \
+	go build -trimpath -ldflags="$(LDFLAGS)" -o "$$outfile" cmd/presto/main.go
 
 # Clean the dist directory
 clean:
-    rm -rf $(DIST)
+	rm -rf $(DIST)
 
 # The release target builds all platforms, zips the artifacts, and creates a checksum file.
 release: clean all
-    @echo "--> Zipping release artifacts..."; \
-    for platform in $(PLATFORMS); do \
-        os=$${platform%-*}; arch=$${platform#*-}; \
-        base="$(DIST)/$(BINARY)-$$os-$$arch"; \
-        out="$$base"; [ "$$os" = "windows" ] && out="$$base.exe"; \
-        zipfile="$$base.zip"; \
-        zip -j "$$zipfile" "$$out"; \
-    done
-    @echo "--> Generating checksums..."; \
-    cd $(DIST) && (command -v sha256sum >/dev/null && sha256sum *.zip > SHA256SUMS || shasum -a 256 *.zip > SHA256SUMS)
+	@echo "--> Zipping release artifacts..."; \
+	for platform in $(PLATFORMS); do \
+		os=$${platform%-*}; arch=$${platform#*-}; \
+		base="$(DIST)/$(BINARY)-$$os-$$arch"; \
+		out="$$base"; [ "$$os" = "windows" ] && out="$$base.exe"; \
+		zipfile="$$base.zip"; \
+		zip -j "$$zipfile" "$$out"; \
+	done
+	@echo "--> Generating checksums..."; \
+	cd $(DIST) && (command -v sha256sum >/dev/null && sha256sum *.zip > SHA256SUMS || shasum -a 256 *.zip > SHA256SUMS)
 
 # Show version info
 version:
-    @echo "Version:   $(VERSION)"
-    @echo "Commit:    $(COMMIT)"
-    @echo "BuildDate: $(DATE)"
+	@echo "Version:   $(VERSION)"
+	@echo "Commit:    $(COMMIT)"
+	@echo "BuildDate: $(DATE)"

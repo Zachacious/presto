@@ -6,6 +6,7 @@ set -euo pipefail
 REPO="github.com/Zachacious/presto" # Your GitHub repo (user/repo)
 MAIN_BRANCH="main"                  # Or "master"
 INITIAL_VERSION="v0.1.0"            # The version for the very first release
+NETWORK_TIMEOUT="30s"               # How long to wait for network commands
 
 # === SCRIPT LOGIC ===
 
@@ -14,11 +15,19 @@ if ! command -v gh >/dev/null 2>&1; then
     echo "❌ GitHub CLI (gh) is required but not found. Please install it: https://cli.github.com/"
     exit 1
 fi
+# Check for the timeout command
+if ! command -v timeout >/dev/null 2>&1; then
+    echo "❌ 'timeout' command is not available. Please install it (usually part of 'coreutils')."
+    exit 1
+fi
 
 # Ensure we are on the main branch and it's up-to-date
 echo "🔄 Switching to '$MAIN_BRANCH' and pulling latest changes..."
 git checkout "$MAIN_BRANCH"
-git pull origin "$MAIN_BRANCH"
+if ! timeout "$NETWORK_TIMEOUT" git pull origin "$MAIN_BRANCH"; then
+    echo "❌ Network Error: Failed to pull from origin. Please check your connection and authentication."
+    exit 1
+fi
 
 # Ensure working directory is clean
 if ! git diff-index --quiet HEAD --; then
@@ -27,7 +36,10 @@ if ! git diff-index --quiet HEAD --; then
 fi
 
 echo "🔄 Fetching latest tags from remote..."
-git fetch --tags --force
+if ! timeout "$NETWORK_TIMEOUT" git fetch --tags --force; then
+    echo "❌ Network Error: Failed to fetch tags from remote. Please check your connection and authentication."
+    exit 1
+fi
 
 # --- Argument Parsing ---
 BUMP="patch" # Default bump type
@@ -45,17 +57,12 @@ while [[ $# -gt 0 ]]; do
 done
 
 # --- Detect and Calculate Version ---
-# If a version was not explicitly passed as an argument, calculate it.
 if [[ -z "$VERSION" ]]; then
-    # Try to get the latest tag. The `2>/dev/null` silences errors if no tags exist.
     LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null)
-
     if [[ -z "$LATEST_TAG" ]]; then
-        # This is the first release scenario
         echo "🔍 No existing tags found. Creating initial release."
         VERSION="$INITIAL_VERSION"
     else
-        # Tags exist, so we bump the latest one
         echo "🔍 Latest tag found: $LATEST_TAG"
         if [[ $LATEST_TAG =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
             MAJOR="${BASH_REMATCH[1]}"
@@ -65,7 +72,6 @@ if [[ -z "$VERSION" ]]; then
             echo "❌ Invalid latest tag format: '$LATEST_TAG'. Expected vX.Y.Z"
             exit 1
         fi
-
         case "$BUMP" in
             major) ((MAJOR++)); MINOR=0; PATCH=0 ;;
             minor) ((MINOR++)); PATCH=0 ;;
@@ -74,7 +80,6 @@ if [[ -z "$VERSION" ]]; then
         VERSION="v$MAJOR.$MINOR.$PATCH"
     fi
 fi
-
 
 # --- Confirmation Step ---
 echo "✅ New version will be: $VERSION"
@@ -85,7 +90,7 @@ if [[ ! $REPLY =~ ^[Yy]$ ]]; then
     exit 1
 fi
 
-# Get release notes from the user if not provided via the -m flag
+# Get release notes from the user
 if [[ -z "$NOTES" ]]; then
     echo "✏️ Please enter the release notes. End with Ctrl+D."
     NOTES=$(</dev/stdin)
@@ -95,13 +100,17 @@ if [[ -z "$NOTES" ]]; then
     exit 1
 fi
 
-
 # --- Execution Step ---
 echo "1. Tagging version $VERSION..."
 git tag -a "$VERSION" -m "Release $VERSION"
 
 echo "2. Pushing tag to GitHub..."
-git push origin "$VERSION"
+if ! timeout "$NETWORK_TIMEOUT" git push origin "$VERSION"; then
+    echo "❌ Network Error: Failed to push the new tag. Please check your connection and permissions."
+    # Attempt to clean up the failed tag locally
+    git tag -d "$VERSION"
+    exit 1
+fi
 
 echo "3. Building release artifacts using 'make'..."
 make release
