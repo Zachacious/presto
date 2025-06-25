@@ -10,6 +10,12 @@ Presto streamlines your development workflow by applying AI transformations to f
 
 ## 🎯 What Presto Does
 
+If you’ve ever copied a file into ChatGPT just to ask a quick question — Presto was built for you.
+
+Presto lets you run LLM completions on any file or folder — using simple CLI flags and regex filters.
+
+Whether you're auditing code, generating docs, summarizing logs, or just asking questions, Presto turns your terminal into an AI-powered assistant that works with your existing tools and workflow.
+
 - **Transform existing files** with AI-powered modifications
 - **Generate new content** from context and prompts
 - **Batch process** entire directories with intelligent filtering
